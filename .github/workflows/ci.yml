@@ -1,0 +1,68 @@
+name: CI — Lint & Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "de_project/**"
+      - "src/**"
+
+jobs:
+  lint-notebooks:
+    name: Lint Notebooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linting tools
+        run: pip install pyflakes
+
+      - name: Lint all notebooks
+        run: |
+          echo "=== Linting notebooks ==="
+          FAILED=0
+          for nb in de_project/notebooks/*.py; do
+            python -m pyflakes "$nb" 2>&1 && echo "✅ $nb" || { echo "❌ $nb"; FAILED=1; }
+          done
+          exit $FAILED
+
+  validate-bundle:
+    name: Validate DAB Bundle
+    runs-on: ubuntu-latest
+    needs: lint-notebooks
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        working-directory: de_project
+        run: databricks bundle validate
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+  label-aegis-fix:
+    name: Label AEGIS Auto-Fix PRs
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.title, '[AEGIS Auto-Fix]')
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['aegis-auto-fix', 'ready-to-merge']
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🛡️ **AEGIS Auto-Fix detected** — notebook code was repaired autonomously by GPT-4o.\n\nThis PR will trigger an automatic deployment to Databricks on merge.'
+            });

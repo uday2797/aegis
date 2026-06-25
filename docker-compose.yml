@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  aegis:
+    build: .
+    environment:
+      - SIMULATION_MODE=true
+      - AEGIS_ENV=demo
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_REPO_OWNER=${GITHUB_REPO_OWNER}
+      - GITHUB_REPO_NAME=${GITHUB_REPO_NAME}
+    volumes:
+      - ./data:/app/data
+    command: python -m src.main

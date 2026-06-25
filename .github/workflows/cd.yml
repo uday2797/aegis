@@ -1,0 +1,56 @@
+name: CD — Deploy to Databricks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "de_project/**"
+
+  # Also allow manual trigger
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target"
+        required: true
+        default: "prod"
+        type: choice
+        options: [dev, prod]
+
+jobs:
+  deploy:
+    name: Deploy DAB Bundle
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Determine target
+        id: target
+        run: |
+          TARGET="${{ github.event.inputs.target || 'prod' }}"
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+          echo "Deploying to: $TARGET"
+
+      - name: Deploy bundle
+        working-directory: de_project
+        run: |
+          echo "=== Deploying AEGIS DE Project to Databricks ==="
+          databricks bundle deploy --target ${{ steps.target.outputs.target }}
+          echo "=== Deployment complete ==="
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bundle**: aegis-de-project" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: ${{ steps.target.outputs.target }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ github.event.head_commit.message }}" == *"AEGIS Auto-Fix"* ]]; then
+            echo "- **Source**: 🛡️ AEGIS Autonomous Notebook Repair" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,38 @@
+resources:
+  jobs:
+    aegis_data_pipeline:
+      name: "[AEGIS] Data Processing Pipeline"
+      description: "Mock DE pipeline — ingest → transform → validate"
+
+      tags:
+        project: aegis
+        team: data-engineering
+
+      email_notifications:
+        on_failure: []
+
+      tasks:
+        - task_key: ingest
+          description: "Ingest raw data from source"
+          notebook_task:
+            notebook_path: ../notebooks/01_ingest
+            base_parameters:
+              env: "${bundle.target}"
+
+        - task_key: transform
+          description: "Apply business transformations"
+          depends_on:
+            - task_key: ingest
+          notebook_task:
+            notebook_path: ../notebooks/02_transform
+            base_parameters:
+              env: "${bundle.target}"
+
+        - task_key: validate
+          description: "Data quality validation — fault-injected for AEGIS demo"
+          depends_on:
+            - task_key: transform
+          notebook_task:
+            notebook_path: ../notebooks/failing_notebook
+            base_parameters:
+              env: "${bundle.target}"

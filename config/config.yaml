@@ -1,0 +1,55 @@
+aegis:
+  name: "AEGIS - AI-Engine for Guardian Intelligence & Self-healing"
+  version: "1.0.0"
+  poll_interval_seconds: 30
+
+detection:
+  data_quality:
+    null_threshold_pct: 5.0        # alert if nulls exceed 5%
+    volume_drop_threshold_pct: 20.0 # alert if row count drops 20%
+  schema_drift:
+    enabled: true
+  model_drift:
+    psi_threshold: 0.2             # PSI > 0.2 = significant drift
+  sla_breach:
+    multiplier: 3.0                # alert if job takes 3x P95 runtime
+
+rca:
+  llm_model: "gpt-4o"         # override with DIAL_DEPLOYMENT env var
+  max_log_lines: 100
+  similar_incidents_k: 5
+  confidence_high: 85
+  confidence_medium: 60
+
+policy:
+  auto_heal_confidence_min: 85
+  low_risk_types:
+    - transient_failure
+    - upstream_delay
+    - data_corruption
+  medium_risk_types:
+    - schema_drift
+    - model_drift
+  high_risk_types:
+    - infra_failure
+    - config_mismatch
+
+healing:
+  retry:
+    max_retries: 3
+    backoff_seconds: 30
+  rollback:
+    enabled: true
+  retraining:
+    trigger_on_drift: true
+
+reporting:
+  teams_enabled: true
+  slack_enabled: false
+  gmail_enabled: true
+  email_enabled: false
+  github_pr_enabled: true
+
+knowledge_store:
+  persist_dir: "./data/knowledge_store"
+  collection_name: "aegis_incidents"

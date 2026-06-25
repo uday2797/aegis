@@ -1,0 +1,20 @@
+bundle:
+  name: aegis-de-project
+
+workspace:
+  host: https://dbc-c486d425-ef89.cloud.databricks.com/
+
+include:
+  - resources/jobs/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/dev
+
+  prod:
+    mode: production
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/prod
