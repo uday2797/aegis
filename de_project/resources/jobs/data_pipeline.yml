@@ -15,7 +15,7 @@ resources:
         - task_key: ingest
           description: "Ingest raw data from source"
           notebook_task:
-            notebook_path: ../notebooks/01_ingest
+            notebook_path: ../../notebooks/01_ingest.py
             base_parameters:
               env: "${bundle.target}"
 
@@ -24,7 +24,7 @@ resources:
           depends_on:
             - task_key: ingest
           notebook_task:
-            notebook_path: ../notebooks/02_transform
+            notebook_path: ../../notebooks/02_transform.py
             base_parameters:
               env: "${bundle.target}"
 
@@ -33,6 +33,6 @@ resources:
           depends_on:
             - task_key: transform
           notebook_task:
-            notebook_path: ../notebooks/failing_notebook
+            notebook_path: ../../notebooks/failing_notebook.py
             base_parameters:
               env: "${bundle.target}"

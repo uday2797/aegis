@@ -222,8 +222,14 @@ class HealOrchestrator:
                     if fixed.startswith("python"):
                         fixed = fixed[6:]
                     fixed = fixed.strip()
-                fixed_notebooks.append({"path": nb["path"], "original": nb["content"], "fixed": fixed})
-                logger.success(f"[HEAL] GPT-4o generated fix for {nb['path']}")
+                # Look up git path from config (for PR commit)
+                git_path_map = self.config.get("databricks_to_git_path", {})
+                git_path = git_path_map.get(nb["path"]) or git_path_map.get(nb["path"].rstrip(".py"))
+                if not git_path:
+                    slug = nb["task_key"].replace(" ", "_").replace("-", "_").lower()
+                    git_path = f"de_project/notebooks/{slug}.py"
+                fixed_notebooks.append({"path": nb["path"], "git_path": git_path, "original": nb["content"], "fixed": fixed})
+                logger.success(f"[HEAL] GPT-4o generated fix for {nb['path']} → git: {git_path}")
 
             # Step 4: upload fixed notebooks back to Databricks
             from databricks.sdk.service.workspace import ImportFormat, Language
@@ -259,7 +265,7 @@ class HealOrchestrator:
                             outcome=f"Notebook bugs fixed autonomously. Job run {run_id} completed successfully.",
                             has_code_fix=True,
                             fix_files=[
-                                {"path": nb["path"], "content": nb["fixed"], "description": "LLM-generated notebook fix"}
+                                {"path": nb["git_path"], "content": nb["fixed"], "description": "LLM-generated notebook fix (auto-committed by AEGIS)"}
                                 for nb in fixed_notebooks
                             ],
                         )
@@ -271,7 +277,7 @@ class HealOrchestrator:
                         outcome=f"Notebook patched by GPT-4o but run failed. Error: {post_error[:200]}",
                         has_code_fix=True,
                         fix_files=[
-                            {"path": nb["path"], "content": nb["fixed"], "description": "LLM fix (needs review)"}
+                            {"path": nb["git_path"], "content": nb["fixed"], "description": "LLM fix (needs review)"}
                             for nb in fixed_notebooks
                         ],
                         approval_required=True,

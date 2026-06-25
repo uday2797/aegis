@@ -48,6 +48,14 @@ reporting:
   slack_enabled: false
   gmail_enabled: true
   email_enabled: false
+
+# Maps Databricks workspace notebook paths → git repo paths for PR commits
+# Format: "workspace_path": "git_relative_path"
+databricks_to_git_path:
+  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/failing_notebook": "de_project/notebooks/failing_notebook.py"
+  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/01_ingest": "de_project/notebooks/01_ingest.py"
+  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/02_transform": "de_project/notebooks/02_transform.py"
+  "/Users/udays2797@gmail.com/Failing Test Notebook": "de_project/notebooks/failing_notebook.py"
   github_pr_enabled: true
 
 knowledge_store:
