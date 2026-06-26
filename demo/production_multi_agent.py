@@ -88,7 +88,12 @@ async def main():
         "merge_sha": None,
         "workflow_run_url": None,
         "deployment_status": None,
+        "post_deployment_healthy": False,
         "emails_sent": [],
+        "available_jobs": [],
+        "user_selected_job_id": None,
+        "model_health_reports": [],
+        "incident_report": None,
         "current_stage": "init",
     }
     
@@ -103,6 +108,18 @@ async def main():
     console.print(f"Final Stage: {final_state['current_stage']}")
     console.print(f"Healthy Jobs: {final_state['healthy_count']}")
     console.print(f"Failed Jobs: {final_state['failed_count']}")
+
+    # Model health summary
+    model_reports = final_state.get("model_health_reports", [])
+    if model_reports:
+        degraded = [r for r in model_reports if r.get("status") != "healthy"]
+        if degraded:
+            console.print(f"[bold yellow]⚠️  Model Drift: {len(degraded)} model(s) degraded[/bold yellow]")
+            for r in degraded:
+                console.print(f"   • {r['model_name']}: {r.get('alert', 'degraded')}")
+        else:
+            console.print(f"[green]✅ ML Models: all {len(model_reports)} healthy[/green]")
+
     if final_state.get("current_incident_id"):
         console.print(f"Incident: {final_state['current_incident_id']}")
         console.print(f"Fix Status: {final_state['fix_status']}")
@@ -112,6 +129,12 @@ async def main():
         if final_state.get("workflow_run_url"):
             console.print(f"Deployment: {final_state['workflow_run_url']}")
     console.print(f"Emails Sent: {', '.join(final_state['emails_sent'])}")
+
+    # Incident report path
+    if final_state.get("incident_report"):
+        report_id = final_state["incident_report"].get("report_id", "")
+        console.print(f"[bold cyan]📋 Incident Report: data/reports/{report_id}.json[/bold cyan]")
+
     console.print("="*60)
 
 

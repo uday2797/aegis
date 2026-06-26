@@ -23,8 +23,10 @@ from src.agents.mail_sender import MailSenderAgent
 from src.agents.job_fixer import JobFixerAgent
 from src.agents.pr_manager import PRManagerAgent
 from src.agents.deployment import DeploymentAgent
+from src.agents.model_monitor import ModelMonitorAgent
 from src.diagnosis.rca_agent import RCAAgent
 from src.guardrails.audit_log import AuditLog
+from src.reporting.incident_report import generate_incident_report
 
 # Confidence threshold below which AEGIS escalates instead of auto-fixing
 RCA_CONFIDENCE_THRESHOLD = 70.0  # percent
@@ -85,6 +87,12 @@ class AEGISState(TypedDict):
     available_jobs: list[dict]  # List of all jobs from Databricks
     user_selected_job_id: str | None  # User's choice: specific job_id or "all"
     
+    # Model health monitoring
+    model_health_reports: list[dict]
+
+    # Generated incident report (populated at end of cycle)
+    incident_report: dict | None
+
     # Loop control
     current_stage: str
 
@@ -276,20 +284,38 @@ async def status_check_node(state: AEGISState) -> AEGISState:
     state["healthy_count"] = sum(1 for r in reports if r["status"] == "healthy")
     state["failed_count"] = sum(1 for r in reports if r["status"] == "failed")
     state["has_failures"] = state["failed_count"] > 0
+
+    # ── Model health check ───────────────────────────────────────────────
+    try:
+        model_agent = ModelMonitorAgent(state.get("config", {}))
+        model_reports = await model_agent.check_model_health()
+        state["model_health_reports"] = model_reports
+        degraded = [r for r in model_reports if r.get("status") != "healthy"]
+        if degraded:
+            logger.warning(
+                f"[Workflow] ⚠️  {len(degraded)} model(s) with drift/degradation detected"
+            )
+        else:
+            logger.success("[Workflow] ✅ All ML models healthy")
+    except Exception as e:
+        logger.warning(f"[Workflow] Model health check skipped: {e}")
+        state["model_health_reports"] = []
+
     state["current_stage"] = "status_checked"
-    
+
     return state
 
 
 async def initial_email_node(state: AEGISState) -> AEGISState:
     """Send initial health check email."""
     logger.info("[Workflow] Stage: initial_email")
-    
+
     agent = MailSenderAgent()
     await agent.send_stage("initial_health_check", {
         "healthy_count": state["healthy_count"],
         "failed_count": state["failed_count"],
         "job_health_reports": state["job_health_reports"],
+        "model_health_reports": state.get("model_health_reports", []),
     })
     
     state["emails_sent"].append("initial_health_check")
@@ -553,7 +579,7 @@ async def post_deployment_verification_node(state: AEGISState) -> AEGISState:
 async def final_confirmation_email_node(state: AEGISState) -> AEGISState:
     """Send final confirmation email that entire cycle completed successfully."""
     logger.info("[Workflow] Stage: final_confirmation_email")
-    
+
     agent = MailSenderAgent()
     await agent.send_stage("final_confirmation", {
         "incident_id": state["current_incident_id"],
@@ -564,17 +590,30 @@ async def final_confirmation_email_node(state: AEGISState) -> AEGISState:
         "post_deployment_healthy": state.get("post_deployment_healthy", False),
         "mttr_seconds": state["mttr_seconds"],
     })
-    
+
     state["emails_sent"].append("final_confirmation")
     state["current_stage"] = "final_confirmation_sent"
-    
+
+    return state
+
+
+async def incident_report_node(state: AEGISState) -> AEGISState:
+    """Generate and save the structured incident report (runs at end of every cycle)."""
+    logger.info("[Workflow] Stage: incident_report")
+    try:
+        report = generate_incident_report(dict(state))
+        state["incident_report"] = report
+        state["current_stage"] = "incident_report_generated"
+    except Exception as e:
+        logger.warning(f"[Workflow] Incident report generation failed (non-fatal): {e}")
+        state["incident_report"] = None
     return state
 
 
 async def deployment_failed_email_node(state: AEGISState) -> AEGISState:
     """Send email when post-deployment verification shows job still failing."""
     logger.info("[Workflow] Stage: deployment_failed_email")
-    
+
     agent = MailSenderAgent()
     await agent.send_stage("deployment_failed", {
         "incident_id": state["current_incident_id"],
@@ -583,10 +622,10 @@ async def deployment_failed_email_node(state: AEGISState) -> AEGISState:
         "pr_url": state["pr_url"],
         "workflow_run_url": state["workflow_run_url"],
     })
-    
+
     state["emails_sent"].append("deployment_failed")
     state["current_stage"] = "deployment_failed_email_sent"
-    
+
     return state
 
 
@@ -661,6 +700,7 @@ def build_aegis_workflow() -> StateGraph:
     workflow.add_node("post_deployment_verification", post_deployment_verification_node)
     workflow.add_node("final_confirmation_email", final_confirmation_email_node)
     workflow.add_node("deployment_failed_email", deployment_failed_email_node)
+    workflow.add_node("incident_report", incident_report_node)
     
     # Set entry point - start with interactive job selection
     workflow.set_entry_point("job_selector")
@@ -722,7 +762,8 @@ def build_aegis_workflow() -> StateGraph:
         },
     )
     
-    workflow.add_edge("final_confirmation_email", END)
-    workflow.add_edge("deployment_failed_email", END)
+    workflow.add_edge("final_confirmation_email", "incident_report")
+    workflow.add_edge("deployment_failed_email", "incident_report")
+    workflow.add_edge("incident_report", END)
     
     return workflow.compile()
