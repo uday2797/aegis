@@ -580,12 +580,15 @@ with st.sidebar:
         # Multi-select for jobs
         job_options = {f"{j['job_id']}": f"{j['name'][:50]}" for j in st.session_state.available_jobs}
         
+        # Only include defaults that exist in current job_options
+        default_values = [str(jid) for jid in st.session_state.selected_job_ids if str(jid) in job_options]
+        
         selected_labels = st.multiselect(
             "Select Job(s) to Monitor",
             options=list(job_options.keys()),
             format_func=lambda x: f"{x} - {job_options[x]}",
             disabled=st.session_state.workflow_running,
-            default=st.session_state.selected_job_ids if st.session_state.selected_job_ids else []
+            default=default_values
         )
         
         st.session_state.selected_job_ids = [int(jid) for jid in selected_labels]
