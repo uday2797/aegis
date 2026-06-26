@@ -1,0 +1,47 @@
+resources:
+  jobs:
+    aegis_failing_job:
+      name: "[AEGIS Test] Data Quality Validation - Failing"
+      description: "Standalone job with intentional bugs for AEGIS RCA and auto-healing demonstration"
+
+      tags:
+        project: aegis
+        team: data-engineering
+        test: self-healing
+        bundle: aegis-de-project
+
+      email_notifications:
+        on_failure:
+          - udays2797@gmail.com
+        on_success:
+          - udays2797@gmail.com
+
+      schedule:
+        # Run every hour to test AEGIS monitoring
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: "UTC"
+        pause_status: PAUSED
+
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+
+      tasks:
+        - task_key: data_quality_validation
+          description: "Validates transformed data - contains 9 intentional bugs (import typo, wrong table/column names, logic errors, division by zero)"
+          notebook_task:
+            notebook_path: ../../notebooks/failing_notebook.py
+            base_parameters:
+              env: "${bundle.target}"
+              run_date: "{{job.start_time.iso_date}}"
+          
+          # Use smallest cluster for testing
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "i3.xlarge"
+            num_workers: 0  # Single-node cluster
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+              Project: AEGIS
