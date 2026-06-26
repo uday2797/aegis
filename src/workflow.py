@@ -223,8 +223,8 @@ async def status_check_node(state: AEGISState) -> AEGISState:
     
     agent = StatusCheckerAgent(state["workspace_host"], state["workspace_token"])
     reports = await agent.check_health(
-        all_jobs=monitor_all,
-        job_id=int(specific_job) if specific_job else None,
+        monitor_all_jobs=monitor_all,
+        specific_job_id=str(specific_job) if specific_job else None,
     )
     
     state["job_health_reports"] = reports
