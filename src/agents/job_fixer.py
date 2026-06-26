@@ -14,7 +14,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.guardrails.audit_log import AuditLog
 from src.guardrails.rate_limiter import RateLimiter
-from src.guardrails.validators import validate_python_code, compute_diff
+from src.guardrails.validators import (
+    validate_python_code,
+    lint_python_code,
+    autoformat_code,
+    compute_diff,
+)
 
 
 class JobFixerAgent:
@@ -102,6 +107,12 @@ class JobFixerAgent:
             logger.info(f"[JobFixer] 📊 Phase 1: Discovering Databricks environment...")
             databricks_context = await self._discover_databricks_context()
             logger.success(f"[JobFixer] ✓ Context discovered: {len(databricks_context.get('tables', []))} tables found")
+
+            # ═══════════════════════════════════════════════════════════════
+            # PHASE 1b: FETCH PAST INCIDENTS (bug reference lookup)
+            # ═══════════════════════════════════════════════════════════════
+            logger.info(f"[JobFixer] 📚 Phase 1b: Looking up similar past incidents...")
+            past_incidents = await self._fetch_past_incidents(error_summary)
             
             # ═══════════════════════════════════════════════════════════════
             # PHASE 2: FETCH NOTEBOOKS
@@ -137,12 +148,13 @@ class JobFixerAgent:
             for nb in notebooks:
                 logger.info(f"[JobFixer] 🔬 Scanning: {nb['path']}")
                 
-                # Use enhanced prompt with Databricks context
+                # Use enhanced prompt with Databricks context + past incidents
                 fixed_content = await self._comprehensive_scan_and_fix(
                     notebook_content=nb["content"],
                     error_summary=error_summary,
                     databricks_context=databricks_context,
-                    notebook_path=nb['path']
+                    notebook_path=nb['path'],
+                    past_incidents=past_incidents,
                 )
 
                 # ─── GUARDRAIL #4: LLM Output Validation ─────────────────
@@ -162,6 +174,28 @@ class JobFixerAgent:
                         "post_fix_run_id": None,
                         "outcome": f"LLM produced invalid Python code: {validation_error}",
                     }
+
+                # ─── GUARDRAIL #4b: Lint Check ──────────────────────────
+                lint_passed, lint_issues = lint_python_code(fixed_content, nb['path'])
+                AuditLog.record(
+                    "LINT_CHECK",
+                    incident_id=incident_id,
+                    job_id=job_id,
+                    notebook_path=nb['path'],
+                    passed=lint_passed,
+                    issues=lint_issues[:5],  # log first 5
+                )
+                if not lint_passed:
+                    logger.warning(f"[JobFixer] ⚠️  Lint issues found (non-blocking): {lint_issues[:3]}")
+
+                # ─── PEP8 Auto-Format ───────────────────────────────
+                fixed_content = autoformat_code(fixed_content)
+                AuditLog.record(
+                    "PEP8_FORMATTED",
+                    incident_id=incident_id,
+                    job_id=job_id,
+                    notebook_path=nb['path'],
+                )
 
                 # ─── GUARDRAIL #2: Notebook Diff Review ──────────────────
                 diff_text = compute_diff(nb["content"], fixed_content, nb['path'])
@@ -335,7 +369,28 @@ class JobFixerAgent:
                 "outcome": str(e),
             }
 
-    async def _discover_databricks_context(self) -> Dict:
+    async def _fetch_past_incidents(self, error_summary: str) -> list[dict]:
+        """
+        Look up similar past incidents from the knowledge store.
+        These are passed to GPT-5.5 as bug references so it can learn
+        from previous fixes rather than guessing from scratch.
+        """
+        try:
+            from src.knowledge.incident_store import IncidentKnowledgeStore
+            store = IncidentKnowledgeStore(
+                self.config.get("knowledge", {"persist_dir": "./data/knowledge_store"})
+            )
+            results = store.search(query=error_summary[:500], top_k=3)
+            if results:
+                logger.info(f"[JobFixer] 📚 Found {len(results)} similar past incident(s) for context")
+            else:
+                logger.info("[JobFixer] 📚 No similar past incidents found (first time seeing this error)")
+            return results
+        except Exception as e:
+            logger.debug(f"[JobFixer] Past incident lookup skipped: {e}")
+            return []
+
+    async def _discover_databricks_context(self) -> dict:
         """
         Scan Databricks environment to understand available tables and schemas.
         This helps GPT-5.5 make context-aware fixes.
@@ -381,7 +436,8 @@ class JobFixerAgent:
         notebook_content: str,
         error_summary: str,
         databricks_context: Dict,
-        notebook_path: str
+        notebook_path: str,
+        past_incidents: list[dict] | None = None,
     ) -> str:
         """
         PHASE 3: Deep scan entire notebook + comprehensive fix.
@@ -399,16 +455,33 @@ class JobFixerAgent:
                 context_str += f"- Sample catalogs: {', '.join([t.get('note', '') for t in databricks_context['tables'][:3]])}\n"
         else:
             context_str += "- Running in isolated/test environment (no live tables detected)\n"
-        
+
+        # Build past-incidents reference block
+        past_ref_str = ""
+        if past_incidents:
+            past_ref_str = "\n## Bug References — Similar Past Incidents\n"
+            past_ref_str += "These are real incidents AEGIS has fixed before. Use them as hints:\n\n"
+            for i, inc in enumerate(past_incidents, 1):
+                meta = inc.get("metadata", inc)
+                past_ref_str += (
+                    f"**Reference #{i}:**\n"
+                    f"- Root Cause: {meta.get('root_cause', 'N/A')}\n"
+                    f"- Action Taken: {meta.get('action_taken', 'N/A')}\n"
+                    f"- Outcome: {meta.get('outcome', 'N/A')}\n\n"
+                )
+        else:
+            past_ref_str = "\n## Bug References\nNo similar past incidents found — rely on code analysis.\n"
+
         prompt = (
             f"🤖 AEGIS AUTONOMOUS NOTEBOOK REPAIR\n\n"
-            f"## Mission: DEEP SCAN → LIST ALL BUGS → FIX EVERYTHING\n\n"
+            f"## Mission: DEEP SCAN → LIST ALL BUGS → FIX EVERYTHING → PEP8 CLEAN\n\n"
             f"You are an autonomous reliability AI. A Databricks notebook has failed in production.\n"
             f"Your job: scan the ENTIRE notebook, understand it deeply, identify ALL bugs, then fix everything in ONE pass.\n\n"
             f"## Databricks Context\n"
             f"{context_str}\n"
+            f"{past_ref_str}\n"
             f"## Current Error (What Triggered This Scan)\n"
-            f"```\n{error_summary}\n```\n\n"
+            f"```\n{error_summary[:3000]}\n```\n\n"
             f"## Full Notebook Source Code\n"
             f"**Path:** `{notebook_path}`\n"
             f"```python\n{notebook_content}\n```\n\n"
@@ -421,39 +494,28 @@ class JobFixerAgent:
             f"- What is the intended data flow?\n\n"
             f"### STEP 2: IDENTIFY ALL BUGS (Complete Audit)\n"
             f"Scan EVERY line and identify ALL bugs. Check for:\n\n"
-            f"**Syntax Errors:**\n"
-            f"- ❌ Import typos (e.g., `import pandsa` → should be `pandas`)\n"
-            f"- ❌ Undefined variables\n"
-            f"- ❌ Missing imports\n\n"
-            f"**Schema/Data Errors:**\n"
-            f"- ❌ Wrong table names (typos like `transformed_sales_dataa` with extra 'a')\n"
-            f"- ❌ Wrong column names (e.g., `price` when column is `unit_price`)\n"
-            f"- ❌ Referencing columns that don't exist\n\n"
-            f"**Math/Logic Errors:**\n"
-            f"- ❌ Division by zero (e.g., `profit / quantity` when quantity can be 0)\n"
-            f"- ❌ Literal zero in denominator (`100 / 0`)\n"
-            f"- ❌ Reversed conditions (e.g., `< 1000` when should be `>= 1000`)\n\n"
-            f"**PySpark/DataFrame Errors:**\n"
-            f"- ❌ Wrong groupBy columns\n"
-            f"- ❌ Missing F.col() wrappers\n"
-            f"- ❌ Incorrect aggregation functions\n\n"
-            f"**Runtime Errors:**\n"
-            f"- ❌ Undefined variables used before assignment\n"
-            f"- ❌ Wrong function signatures\n"
-            f"- ❌ Type mismatches\n\n"
+            f"**Syntax & Import Errors:** Import typos, missing imports, undefined variables\n"
+            f"**Schema/Data Errors:** Wrong table names (typos), wrong column names, non-existent columns\n"
+            f"**Math/Logic Errors:** Division by zero, reversed conditions, off-by-one errors\n"
+            f"**PySpark/DataFrame Errors:** Wrong groupBy columns, missing F.col() wrappers, incorrect aggregations\n"
+            f"**Runtime Errors:** Variables used before assignment, wrong function signatures, type mismatches\n"
+            f"**PEP8/Style Issues:** Lines > 120 chars, bare excepts, magic numbers without comments\n\n"
             f"### STEP 3: LIST ALL BUGS FOUND\n"
-            f"Before fixing, explicitly list every bug you identified.\n"
-            f"Format: `BUG #X: [description]`\n\n"
+            f"Before fixing, explicitly list every bug. Format: `BUG #X: [description]`\n\n"
             f"### STEP 4: FIX ALL BUGS (One Comprehensive Fix)\n"
             f"Generate corrected code that fixes EVERY bug you listed.\n\n"
-            f"**Requirements:**\n"
-            f"✅ Fix ALL import errors\n"
-            f"✅ Fix ALL table/column name typos\n"
-            f"✅ Define ALL variables before use\n"
-            f"✅ Add safety checks for ALL divisions (null/zero checks)\n"
-            f"✅ Correct ALL logic errors\n"
-            f"✅ Fix ALL PySpark syntax issues\n"
-            f"✅ Ensure notebook runs end-to-end without ANY errors\n\n"
+            f"**Functional Requirements:**\n"
+            f"✅ Fix ALL import errors | Fix ALL table/column name typos\n"
+            f"✅ Define ALL variables before use | Add safety checks for divisions\n"
+            f"✅ Correct ALL logic errors | Fix ALL PySpark syntax issues\n\n"
+            f"**Code Quality Requirements (PEP8):**\n"
+            f"✅ Follow PEP8: 4-space indentation, max 120 chars per line\n"
+            f"✅ Use descriptive variable names (no single-letter vars except loop counters)\n"
+            f"✅ Add type hints on all function definitions\n"
+            f"✅ Use f-strings for string formatting (not .format() or %)\n"
+            f"✅ No bare `except:` — always catch specific exceptions\n"
+            f"✅ Two blank lines between top-level functions/classes\n"
+            f"✅ Imports grouped: stdlib → third-party → local\n\n"
             f"### STEP 5: OUTPUT FORMAT\n"
             f"Return your response in TWO sections:\n\n"
             f"**Section 1: BUG REPORT**\n"
@@ -466,19 +528,19 @@ class JobFixerAgent:
             f"```\n\n"
             f"**Section 2: FIXED CODE**\n"
             f"```python\n"
-            f"[corrected notebook code with ALL bugs fixed]\n"
+            f"[corrected PEP8-compliant notebook code with ALL bugs fixed]\n"
             f"```\n\n"
-            f"⚠️ CRITICAL: This is autonomous healing. You must fix EVERY bug in ONE pass.\n"
-            f"The notebook must be production-ready after your fix."
+            f"⚠️ CRITICAL: Fix EVERY bug in ONE pass. Code must be PEP8-compliant and production-ready."
         )
         
         messages = [
             SystemMessage(content=(
-                "You are AEGIS, an elite autonomous AI reliability engineer. "
-                "You specialize in deep code analysis and comprehensive bug fixing. "
+                "You are AEGIS, an elite autonomous AI reliability engineer and senior Python developer. "
+                "You specialize in deep code analysis, comprehensive bug fixing, and writing clean, production-grade code. "
                 "You NEVER do partial fixes. You scan thoroughly, identify ALL issues, then fix everything at once. "
                 "You are an expert in PySpark, Databricks, Python, and data engineering. "
-                "You think systematically: understand → scan → list → fix."
+                "You ALWAYS write PEP8-compliant code: proper indentation, descriptive names, type hints, specific exception handling. "
+                "You think systematically: understand → scan → reference past bugs → list → fix → clean."
             )),
             HumanMessage(content=prompt),
         ]
