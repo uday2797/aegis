@@ -2,7 +2,7 @@ name: CI — Lint & Validate
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
     paths:
       - "de_project/**"
       - "src/**"
