@@ -54,3 +54,39 @@ jobs:
           if [[ "${{ github.event.head_commit.message }}" == *"AEGIS Auto-Fix"* ]]; then
             echo "- **Source**: 🛡️ AEGIS Autonomous Notebook Repair" >> $GITHUB_STEP_SUMMARY
           fi
+
+  destroy:
+    name: Destroy DAB Bundle
+    runs-on: ubuntu-latest
+    environment: production
+    # Only allow manual trigger for destroy
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Confirm destroy
+        run: |
+          echo "⚠️ WARNING: This will destroy all resources in the bundle!"
+          echo "Target: ${{ github.event.inputs.target || 'prod' }}"
+
+      - name: Destroy bundle
+        working-directory: de_project
+        run: |
+          TARGET="${{ github.event.inputs.target || 'prod' }}"
+          echo "=== Destroying AEGIS DE Project Bundle (target=$TARGET) ==="
+          databricks bundle destroy --target $TARGET --auto-approve
+          echo "=== Destroy complete ==="
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "### ⚠️ Bundle Destroyed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bundle**: aegis-de-project" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: ${{ github.event.inputs.target || 'prod' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **All resources have been removed from Databricks**" >> $GITHUB_STEP_SUMMARY
+

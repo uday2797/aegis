@@ -239,6 +239,13 @@ class FailureDetector:
     def _classify_failure(self, error_msg: str) -> FailureType:
         """Classify failure type from Databricks error message text."""
         msg = error_msg.lower()
+        # Python exceptions → transient (retry → LLM notebook repair if code bug)
+        # Must check FIRST — error traces include notebook source that can contain
+        # misleading words like "data quality" from print statements
+        if any(k in msg for k in ["error:", "exception", "traceback", "importerror",
+                                   "nameerror", "typeerror", "valueerror", "zerodivisionerror",
+                                   "modulenotfounderror", "attributeerror", "syntaxerror"]):
+            return FailureType.TRANSIENT_FAILURE
         if any(k in msg for k in ["analysisexception", "cannot resolve", "schemamismatch", "schema"]):
             return FailureType.SCHEMA_DRIFT
         if any(k in msg for k in ["outofmemory", "oom", "gc overhead", "executor lost"]):

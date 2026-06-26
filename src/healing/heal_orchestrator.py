@@ -52,12 +52,44 @@ class HealOrchestrator:
             FailureType.CONFIG_MISMATCH: self._generate_config_fix,
         }
 
-        action_fn = action_map.get(rca.failure_type, self._escalate_unknown)
+        # In production mode, skip retries — go straight to LLM notebook repair
+        if not self.simulation_mode and self._job_id:
+            action_fn = self._direct_llm_heal
+        else:
+            action_fn = action_map.get(rca.failure_type, self._escalate_unknown)
         result = await action_fn(rca, incident_id)
         logger.success(f"[HEAL] Done | status={result.status} | action='{result.action_taken}'")
         return result
 
     # ─── Healing Actions ─────────────────────────────────────────────────────
+
+    async def _direct_llm_heal(self, rca: RCAResult, incident_id: str) -> HealResult:
+        """Production fast-path: fetch last error, call GPT-4o once, fix & run."""
+        api_key = os.environ.get("DIAL_API_KEY")
+        if not api_key:
+            logger.warning("[HEAL] No DIAL_API_KEY — falling back to retry")
+            return await self._retry_with_backoff(rca, incident_id)
+        try:
+            client = _databricks_client()
+            job_id = int(self._job_id)
+            # Fetch error from the most recent failed run
+            runs = list(client.jobs.list_runs(job_id=job_id, limit=1))
+            last_error = ""
+            if runs:
+                last_error = await self._get_run_error(client, runs[0].run_id)
+            if not last_error:
+                last_error = rca.root_cause  # fallback to LLM-inferred cause
+            logger.info("[HEAL] Direct LLM path — skipping retries, fixing notebook now")
+            return await self._fix_notebook_and_retry(incident_id, last_error, client, job_id)
+        except Exception as e:
+            logger.error(f"[HEAL] Direct LLM heal failed: {e}")
+            return HealResult(
+                incident_id=incident_id,
+                status=HealStatus.ESCALATED,
+                action_taken="LLM heal encountered an error — escalated",
+                outcome=str(e),
+                approval_required=True,
+            )
 
     async def _retry_with_backoff(self, rca: RCAResult, incident_id: str) -> HealResult:
         max_retries = self.config.get("retry", {}).get("max_retries", 3)

@@ -3,9 +3,202 @@
 > This document explains every file, class, and design decision in AEGIS
 > so any team member can understand, extend, or present the code confidently.
 
+**⭐ NEW: Multi-Agent Architecture** — AEGIS now uses **LangGraph** to orchestrate 5 specialized agents in a state machine workflow. See the [Multi-Agent Architecture](MULTI_AGENT_ARCHITECTURE.md) doc for full details.
+
 ---
 
-## 1. `src/models.py` — Shared Data Contracts
+## Quick Navigation
+
+**Multi-Agent System (New)**:
+- [`src/agents/status_checker.py`](#multi-agent-1-statuschecker) — Health monitoring
+- [`src/agents/mail_sender.py`](#multi-agent-2-mailsender) — 6-stage email notifications
+- [`src/agents/job_fixer.py`](#multi-agent-3-jobfixer) — LLM notebook repair
+- [`src/agents/pr_manager.py`](#multi-agent-4-prmanager) — PR creation & approval polling
+- [`src/agents/deployment.py`](#multi-agent-5-deployment) — CD automation
+- [`src/workflow.py`](#langgraph-orchestration) — LangGraph state machine
+
+**Original Components (Legacy)**:
+- [`src/models.py`](#1-srcmodelspy) — Shared data contracts
+- [`src/detection/failure_detector.py`](#2-srcdetectionfailure_detectorpy) — Eyes of AEGIS
+- [`src/diagnosis/rca_agent.py`](#3-srcdiagnosisrca_agentpy) — LLM brain
+- [`src/healing/heal_orchestrator.py`](#4-srchealingheal_orchestratorpy) — Self-healing actions
+- [`src/reporting/incident_reporter.py`](#5-srcreportingincident_reporterpy) — Notifications & reports
+
+---
+
+## Multi-Agent System
+
+### Multi-Agent #1: StatusChecker
+
+**File:** `src/agents/status_checker.py`
+
+**Purpose:** Monitors Databricks jobs and reports health status.
+
+**Key Features:**
+- Discover all jobs in workspace or filter by DAB bundle tag
+- Monitor specific job by ID
+- Extract error traces from failed task runs
+- Return structured `JobHealthReport[]`
+
+**Usage:**
+```python
+agent = StatusCheckerAgent(host, token)
+reports = await agent.check_health(
+    monitor_all_jobs=True,
+    dab_bundle_name="aegis-de-project"
+)
+```
+
+**Output:**
+```python
+[{
+    "job_id": "470575380114552",
+    "job_name": "[AEGIS] Data Processing Pipeline",
+    "status": "failed",
+    "error_summary": "ModuleNotFoundError: pandsa",
+    "failed_tasks": ["validate"]
+}]
+```
+
+---
+
+### Multi-Agent #2: MailSender
+
+**File:** `src/agents/mail_sender.py`
+
+**Purpose:** 6-stage email notifications (non-blocking).
+
+**Key Features:**
+- Non-blocking SMTP sends via `asyncio.to_thread()`
+- HTML email templates with color-coded status
+- Retry logic (2 attempts, 30s timeout)
+
+**6 Notification Stages:**
+1. `initial_health_check` — All good or failures detected
+2. `failure_alert` — Error trace + GPT-4o RCA
+3. `fix_in_progress` — Notebook repair started
+4. `fix_complete` — Job fixed, MTTR
+5. `pr_raised` — PR created, awaiting approval
+6. `deployment_complete` — CD finished, all healthy
+
+**Usage:**
+```python
+agent = MailSenderAgent()
+await agent.send_stage("fix_complete", {
+    "incident_id": "INC-ABC123",
+    "post_fix_run_id": 123456,
+    "mttr_seconds": 90
+})
+```
+
+---
+
+### Multi-Agent #3: JobFixer
+
+**File:** `src/agents/job_fixer.py`
+
+**Purpose:** LLM-powered autonomous notebook repair.
+
+**Key Features:**
+- Fetch notebook source from Databricks
+- Call GPT-4o with error + code → fixed code
+- Upload fixed notebook to Databricks
+- Trigger job run and verify success
+
+**Flow:**
+```python
+agent = JobFixerAgent(host, token, config)
+result = await agent.fix_job(
+    job_id=470575380114552,
+    error_summary="ModuleNotFoundError: pandsa",
+    incident_id="INC-ABC123"
+)
+# Returns: {"status": "success", "fixed_notebooks": [...], "post_fix_run_id": 123}
+```
+
+**GPT-4o Integration:**
+- Uses EPAM DIAL API (Azure OpenAI proxy)
+- Temperature=0 for deterministic fixes
+- Strips markdown code fences from response
+
+---
+
+### Multi-Agent #4: PRManager
+
+**File:** `src/agents/pr_manager.py`
+
+**Purpose:** GitHub PR creation and approval polling.
+
+**Key Features:**
+- Create branch: `aegis-hotfix/{incident_id}`
+- Commit fixed notebooks to git repo
+- Create PR with AI-generated description
+- **Poll PR status** every 60s until merged or rejected (max 60 min)
+
+**Usage:**
+```python
+agent = PRManagerAgent()
+result = await agent.create_pr(
+    incident_id="INC-ABC123",
+    fixed_notebooks=[...],
+    root_cause="Typo in import statement"
+)
+# Returns: {"pr_url": "...", "pr_number": 1}
+
+# Wait for approval
+approval = await agent.wait_for_pr_approval(pr_number=1, timeout_minutes=60)
+# Returns: {"merged": True, "sha": "abc123"}
+```
+
+---
+
+### Multi-Agent #5: Deployment
+
+**File:** `src/agents/deployment.py`
+
+**Purpose:** GitHub Actions CD automation.
+
+**Key Features:**
+- Wait for CD workflow run triggered by merge commit
+- Poll workflow status until completion (max 10 min)
+- Return workflow run URL and conclusion
+
+**Usage:**
+```python
+agent = DeploymentAgent()
+result = await agent.trigger_cd(merge_sha="abc123")
+# Returns: {"workflow_run_url": "...", "status": "success"}
+```
+
+---
+
+### LangGraph Orchestration
+
+**File:** `src/workflow.py`
+
+**Purpose:** State machine workflow that orchestrates all 5 agents.
+
+**Key Components:**
+- `AEGISState` TypedDict — global state shared across agents
+- 11 workflow nodes (status_check, initial_email, failure_alert, ...)
+- 3 conditional routing functions
+- `build_aegis_workflow()` — builds the LangGraph compiled graph
+
+**Conditional Edges:**
+- After `initial_email`: If failures → `failure_alert`, else → END
+- After `job_fixer`: If success → `fix_complete_email`, else → escalate
+- After `pr_wait_approval`: If merged → `deployment`, else → escalate
+
+**Entry Point:**
+```bash
+python demo/production_multi_agent.py
+```
+
+---
+
+## Original Components (Legacy)
+
+### 1. `src/models.py` — Shared Data Contracts
 
 **Purpose:** All data structures that flow between components. Think of these as the "language" that AEGIS components speak to each other.
 

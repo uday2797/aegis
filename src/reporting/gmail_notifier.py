@@ -271,3 +271,46 @@ class GmailNotifier:
                 return False
         logger.error("[GMAIL] All send attempts failed")
         return False
+
+    async def send_alert(self, subject: str, body: str) -> bool:
+        """Send a plain-text alert email (used for before/after fix notifications)."""
+        if not self.enabled:
+            logger.warning(f"[GMAIL] Alert not sent (not configured): {subject}")
+            return False
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"AEGIS Reliability Agent <{self.sender}>"
+        msg["To"] = ", ".join(self.recipients)
+        html_body = f"""
+<!DOCTYPE html><html><body style="background:#0e1117;font-family:Arial,sans-serif;color:#e0e0e0;padding:30px;">
+<div style="max-width:620px;margin:auto;background:#1c1f26;border-radius:12px;padding:28px;border:1px solid #2d3139;">
+  <h2 style="color:#fff;margin-top:0;">🛡️ AEGIS Alert</h2>
+  <pre style="background:#0e1117;color:#a0cfff;padding:16px;border-radius:8px;white-space:pre-wrap;font-size:13px;">{body}</pre>
+  <p style="color:#555;font-size:11px;margin-bottom:0;">AI-Engine for Guardian Intelligence &amp; Self-healing</p>
+</div></body></html>"""
+        msg.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+
+        import time
+        for attempt in range(1, 3):
+            try:
+                with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=30) as smtp:
+                    smtp.ehlo()
+                    smtp.starttls()
+                    smtp.login(self.sender, self.app_password)
+                    smtp.sendmail(self.sender, self.recipients, msg.as_string())
+                logger.success(f"[GMAIL] Alert sent: {subject}")
+                return True
+            except smtplib.SMTPAuthenticationError:
+                logger.error("[GMAIL] Auth failed on alert send")
+                return False
+            except (smtplib.SMTPException, OSError) as e:
+                logger.warning(f"[GMAIL] Alert attempt {attempt}/2 failed: {e}")
+                if attempt < 2:
+                    time.sleep(3)
+            except Exception as e:
+                logger.error(f"[GMAIL] Alert unexpected error: {e}")
+                return False
+        logger.error("[GMAIL] Alert: all attempts failed")
+        return False

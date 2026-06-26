@@ -93,6 +93,20 @@ class AEGISOrchestrator:
 
         # HEAL
         if can_auto_heal:
+            # ── Before-fix notification ──────────────────────────────────────
+            before_subject = f"[AEGIS] 🔧 Fixing {incident.incident_id} | {incident.job_name}"
+            before_body = (
+                f"AEGIS is autonomously fixing a failure.\n\n"
+                f"Incident  : {incident.incident_id}\n"
+                f"Job       : {incident.job_name}\n"
+                f"Error     : {incident.error_summary[:300]}\n\n"
+                f"Root Cause: {rca.root_cause}\n"
+                f"Confidence: {rca.confidence:.0f}%\n"
+                f"Action    : GPT-4o notebook repair in progress...\n\n"
+                f"You will receive another email when the fix is complete."
+            )
+            await self.reporter.gmail.send_alert(before_subject, before_body)
+            # ────────────────────────────────────────────────────────────────
             heal = await self.healer.heal(rca, incident.incident_id)
         else:
             heal = HealResult(
