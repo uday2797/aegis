@@ -1,4 +1,222 @@
-# 🛡️ AEGIS — AI-Engine for Guardian Intelligence & Self-healing
+# 🛡️ AEGIS — Your Pipeline's Self-Healing Robot
+
+> **"When your data pipeline breaks at 3am, AEGIS fixes it before you even wake up."**
+
+---
+
+## 🤔 What problem does this solve?
+
+Imagine you have a factory. Every night, machines run automatically to process data.  
+One night, a machine breaks. Someone has to:
+
+1. Wake up at 3am
+2. Figure out **what** broke
+3. Figure out **why** it broke
+4. Fix the code
+5. Test the fix
+6. Deploy the fix
+7. Check it works
+8. Tell everyone what happened
+
+**AEGIS does all of that automatically. You sleep. AEGIS works.**
+
+---
+
+## 🧠 How does it work? (Simple version)
+
+```
+Something breaks
+      ↓
+AEGIS wakes up (automatically)
+      ↓
+Reads the error message
+      ↓
+AI figures out what went wrong (like a detective 🕵️)
+      ↓
+AI writes the fix (like a surgeon 🔧)
+      ↓
+Tests the fix on real data
+      ↓
+Creates a code change for humans to review
+      ↓
+Deploys when approved
+      ↓
+Sends you an email at every step 📧
+      ↓
+You wake up to a fixed pipeline ✅
+```
+
+---
+
+## 📧 Emails you receive (automatically)
+
+| # | When | What it says |
+|---|---|---|
+| 1 | Health check done | "✅ All 8 jobs healthy" or "⚠️ 1 job failed" |
+| 2 | Failure found | "Job X failed. Root cause: [AI explanation]. Confidence: 99%" |
+| 3 | Fix started | "🔧 AI is fixing the broken notebook right now..." |
+| 4 | Fix done | "✅ Job fixed and running successfully. Time taken: 2 min" |
+| 5 | PR created | "📝 Code fix ready for review: [GitHub link]" |
+| 6 | Deployed | "🚀 Fix deployed to production" |
+| 7 | All clear | "🎉 Full cycle complete. Job is healthy again." |
+| 8 | Escalation | "❌ AEGIS couldn't fix this. Human help needed." |
+
+---
+
+## 🔒 Safety Rules (Guardrails)
+
+AEGIS never acts recklessly. Before doing anything, it checks:
+
+| Safety Check | What it does |
+|---|---|
+| **Confidence Gate** | If AI is less than 70% sure → escalates to human instead of guessing |
+| **Code Validation** | Checks the fix is valid Python before uploading (won't upload broken code) |
+| **Lint Check** | Checks code style and catches undefined variables |
+| **PEP8 Formatting** | Auto-formats code to professional Python standards |
+| **Rollback** | If the fix makes things worse → restores original code automatically |
+| **Rate Limiter** | Won't trigger more than 5 job runs in 10 minutes (protects your cloud bill) |
+| **Audit Log** | Records every single action taken to `data/audit_log.jsonl` |
+| **PR Gate** | Code only goes to production after a human approves it on GitHub |
+
+---
+
+## 🤖 The 6 Agents (Team of robots)
+
+Think of these like specialists on a team:
+
+| Agent | Job | Like a... |
+|---|---|---|
+| **StatusChecker** | Checks if jobs are healthy | Security guard checking all doors |
+| **MailSender** | Sends you emails at every step | Receptionist keeping you informed |
+| **RCAAgent** | Figures out what went wrong | Detective investigating the crime |
+| **JobFixer** | Writes and uploads the code fix | Surgeon performing the operation |
+| **PRManager** | Creates a GitHub PR and waits for approval | Lawyer filing paperwork |
+| **DeploymentAgent** | Deploys after approval and checks it worked | Delivery driver + quality inspector |
+
+---
+
+## 🚀 Running AEGIS
+
+### Prerequisites
+- Python 3.10+
+- VPN connected (for AI API access)
+- `.env` file with credentials (copy from `.env.example`)
+
+### Install
+```powershell
+pip install -r requirements.txt
+```
+
+### Run
+```powershell
+$env:PYTHONPATH="C:\path\to\aegis"
+python demo/production_multi_agent.py
+```
+
+### What you'll see
+```
+📋 Found 8 Databricks jobs:
+┌──────────────┬──────────────────────────────────┬───────────────┐
+│ Job ID       │ Job Name                         │ Status        │
+├──────────────┼──────────────────────────────────┼───────────────┤
+│ 825205099813 │ Data Quality Validation - Failing │ ❌ FAILED    │
+│ 470575380114 │ Data Processing Pipeline          │ ✅ SUCCESS   │
+└──────────────┴──────────────────────────────────┴───────────────┘
+
+Your selection: 825205099813685
+```
+
+Then AEGIS does everything automatically. You just watch.
+
+---
+
+## ⚡ Real Performance (Measured)
+
+| Metric | Value |
+|---|---|
+| Time to detect failure | ~5 seconds |
+| Time to run RCA | ~10 seconds |
+| Time for AI to fix notebook | ~77 seconds |
+| Time to verify fix | ~22 seconds |
+| **Total time: broken → fixed** | **~2 minutes** |
+| Human intervention required | **Zero** |
+
+---
+
+## 📁 Project Structure (Simplified)
+
+```
+aegis/
+│
+├── demo/
+│   └── production_multi_agent.py   ← START HERE (run this)
+│
+├── src/
+│   ├── workflow.py                 ← The master brain (connects all agents)
+│   ├── agents/
+│   │   ├── status_checker.py       ← Checks if jobs are healthy
+│   │   ├── mail_sender.py          ← Sends emails
+│   │   ├── job_fixer.py            ← The AI that fixes broken code
+│   │   ├── pr_manager.py           ← Creates GitHub Pull Requests
+│   │   └── deployment.py           ← Handles deployment
+│   ├── diagnosis/
+│   │   └── rca_agent.py            ← AI that figures out root cause
+│   ├── guardrails/
+│   │   ├── audit_log.py            ← Logs every action (safety)
+│   │   ├── rate_limiter.py         ← Prevents too many runs (safety)
+│   │   └── validators.py           ← Checks fixed code quality (safety)
+│   └── knowledge/
+│       └── incident_store.py       ← Remembers past incidents (learns over time)
+│
+├── de_project/
+│   └── notebooks/
+│       └── failing_notebook.py     ← The intentionally broken test notebook
+│
+├── .github/workflows/
+│   ├── ci.yml                      ← Auto-tests code on every PR
+│   └── cd.yml                      ← Auto-deploys when PR is merged
+│
+├── config/config.yaml              ← All settings (thresholds, API endpoints)
+├── .env                            ← Your secrets (never committed to git)
+└── requirements.txt                ← Python packages needed
+```
+
+---
+
+## 🔧 Technology Stack
+
+| What | Tool | Why |
+|---|---|---|
+| AI model | GPT-5.5 via EPAM DIAL | Understands code, fixes bugs, explains root cause |
+| Agent orchestration | LangGraph | Connects all agents in a reliable workflow |
+| Data platform | Databricks | Where the pipelines run |
+| Notifications | Gmail SMTP | Sends you updates at every step |
+| Code hosting | GitHub | Stores fixes, runs CI/CD |
+| Language | Python 3.10+ | Everything is Python |
+
+---
+
+## 🌟 What makes AEGIS different?
+
+Most monitoring tools just **tell you** something broke.  
+AEGIS **fixes it**.
+
+| Feature | Other tools | AEGIS |
+|---|---|---|
+| Detect failures | ✅ | ✅ |
+| Tell you what broke | ✅ | ✅ |
+| Fix it automatically | ❌ | ✅ |
+| Learn from past incidents | ❌ | ✅ |
+| Rollback if fix fails | ❌ | ✅ |
+| PEP8 compliant fixes | ❌ | ✅ |
+| Human stays in control (PR gate) | ❌ | ✅ |
+
+---
+
+## 💡 In one sentence
+
+> **AEGIS watches your data pipelines 24/7, and when something breaks, it reads the error, writes a fix using AI, tests it, and deploys it — all while keeping you informed by email every step of the way.**
+
 
 > **Hackathon:** AI-Autonomous Reliability Engineer | Data DevOps & MLOps Track  
 > **Theme:** Self-Healing Data & ML Systems
