@@ -279,8 +279,10 @@ if "incidents_history" not in st.session_state:
     st.session_state.incidents_history = []
 if "available_jobs" not in st.session_state:
     st.session_state.available_jobs = []
-if "selected_job_id" not in st.session_state:
-    st.session_state.selected_job_id = None
+if "selected_job_ids" not in st.session_state:
+    st.session_state.selected_job_ids = []  # Multiple jobs
+if "monitored_jobs_status" not in st.session_state:
+    st.session_state.monitored_jobs_status = {}  # {job_id: latest_status_dict}
 if "pr_url" not in st.session_state:
     st.session_state.pr_url = None
 if "workflow_run_url" not in st.session_state:
@@ -291,6 +293,12 @@ if "mttr_seconds" not in st.session_state:
     st.session_state.mttr_seconds = 0
 if "email_count" not in st.session_state:
     st.session_state.email_count = 0
+if "last_run_result" not in st.session_state:
+    st.session_state.last_run_result = None  # dict with outcome summary
+if "workflow_completed_at" not in st.session_state:
+    st.session_state.workflow_completed_at = None  # time.time() when finished
+if "job_health_reports" not in st.session_state:
+    st.session_state.job_health_reports = []
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
@@ -309,23 +317,35 @@ def add_log(message: str, level: str = "info"):
         st.session_state.workflow_logs = st.session_state.workflow_logs[-100:]
 
 def fetch_databricks_jobs():
-    """Fetch all available Databricks jobs"""
+    """Fetch all available Databricks jobs with latest status"""
     try:
         client = WorkspaceClient(
-            host=config["databricks"]["host"],
-            token=config["databricks"]["token"]
+            host=os.getenv("DATABRICKS_HOST"),
+            token=os.getenv("DATABRICKS_TOKEN")
         )
         jobs = []
         for job in client.jobs.list():
             # Get latest run status
             runs = list(client.jobs.list_runs(job_id=job.job_id, limit=1))
-            latest_status = runs[0].state.life_cycle_state.value if runs else "UNKNOWN"
+            latest_run = runs[0] if runs else None
+            
+            if latest_run:
+                status = latest_run.state.life_cycle_state.value
+                result_state = latest_run.state.result_state.value if latest_run.state.result_state else "UNKNOWN"
+                run_id = latest_run.run_id
+            else:
+                status = "UNKNOWN"
+                result_state = "UNKNOWN"
+                run_id = None
             
             jobs.append({
                 "job_id": job.job_id,
                 "name": job.settings.name,
                 "tasks": len(job.settings.tasks) if job.settings.tasks else 0,
-                "status": latest_status
+                "status": status,
+                "result_state": result_state,
+                "run_id": run_id,
+                "is_failed": result_state in ["FAILED", "TIMEDOUT", "CANCELED"],
             })
         return jobs
     except Exception as e:
@@ -339,13 +359,21 @@ def get_elapsed_time():
         return f"{int(elapsed)}s"
     return "0s"
 
-def run_aegis_workflow_thread(selected_job_id: str):
-    """Run AEGIS workflow in background thread"""
+def run_aegis_workflow_thread(selected_job_ids: list):
+    """Run AEGIS workflow in background thread for selected jobs"""
     try:
-        add_log("🚀 Initializing AEGIS workflow...", "info")
+        add_log(f"🚀 Initializing AEGIS workflow for {len(selected_job_ids)} job(s)...", "info")
         st.session_state.start_time = time.time()
         st.session_state.current_node = "job_selector"
         st.session_state.completed_nodes = []
+        
+        # Determine monitoring mode
+        if len(selected_job_ids) == 1:
+            specific_job_id = selected_job_ids[0]
+            monitor_all = False
+        else:
+            specific_job_id = None
+            monitor_all = True
         
         # Build workflow
         workflow = build_aegis_workflow()
@@ -353,10 +381,10 @@ def run_aegis_workflow_thread(selected_job_id: str):
         
         # Initial state
         initial_state: AEGISState = {
-            "workspace_host": config["databricks"]["host"],
-            "workspace_token": config["databricks"]["token"],
-            "monitor_all_jobs": selected_job_id == "all",
-            "specific_job_id": selected_job_id if selected_job_id != "all" else None,
+            "workspace_host": os.getenv("DATABRICKS_HOST"),
+            "workspace_token": os.getenv("DATABRICKS_TOKEN"),
+            "monitor_all_jobs": monitor_all,
+            "specific_job_id": specific_job_id,
             "dab_bundle_name": config.get("dab_bundle_name"),
             "config": config,
             "job_health_reports": [],
@@ -383,55 +411,134 @@ def run_aegis_workflow_thread(selected_job_id: str):
             "post_deployment_healthy": False,
             "emails_sent": [],
             "available_jobs": st.session_state.available_jobs,
-            "user_selected_job_id": selected_job_id,
+            "user_selected_job_id": ",".join(map(str, selected_job_ids)) if len(selected_job_ids) > 1 else str(selected_job_ids[0]),
         }
         
-        add_log(f"✅ Workflow initialized. Monitoring: {selected_job_id}", "success")
+        add_log(f"✅ Workflow initialized. Monitoring: {', '.join(map(str, selected_job_ids))}", "success")
+        
+        final_state = {}
         
         # Execute workflow with node tracking
         for state_update in workflow_app.stream(initial_state):
-            # Track current node
             if state_update:
                 node_name = list(state_update.keys())[0]
                 st.session_state.current_node = node_name
                 
                 if node_name not in st.session_state.completed_nodes:
                     st.session_state.completed_nodes.append(node_name)
-                    add_log(f"📍 Node: {node_name}", "info")
                 
                 # Extract state data
                 node_state = state_update[node_name]
+                final_state = node_state  # always keep the last
                 
-                # Update session state with latest data
+                # Rich per-node logging
+                if node_name == "job_selector":
+                    add_log(f"🔍 [job_selector] Fetching Databricks jobs...", "info")
+                elif node_name == "status_check":
+                    healthy = node_state.get("healthy_count", 0)
+                    failed = node_state.get("failed_count", 0)
+                    add_log(f"📊 [status_check] Healthy: {healthy} | Failed: {failed}", "info")
+                    if node_state.get("job_health_reports"):
+                        st.session_state.job_health_reports = node_state["job_health_reports"]
+                        for r in node_state["job_health_reports"]:
+                            emoji = "✅" if r["status"] == "healthy" else "❌"
+                            add_log(f"  {emoji} Job {r.get('job_id','?')}: {r['status'].upper()} — {r.get('job_name','')}", "success" if r["status"] == "healthy" else "error")
+                elif node_name == "initial_email":
+                    has_fail = node_state.get("has_failures", False)
+                    add_log(f"✉️  [initial_email] Sent — {'⚠️ Failures detected' if has_fail else '✅ All healthy, no action needed'}", "success")
+                elif node_name == "failure_alert":
+                    conf = node_state.get("confidence", 0)
+                    rc = node_state.get("root_cause", "N/A")
+                    add_log(f"🔬 [failure_alert] RCA confidence: {conf:.0%} — {rc[:80]}", "warning")
+                elif node_name == "job_fixer":
+                    status = node_state.get("fix_status", "unknown")
+                    add_log(f"🔧 [job_fixer] Fix result: {status.upper()}", "success" if status == "success" else "error")
+                elif node_name == "pr_create":
+                    pr = node_state.get("pr_url")
+                    if pr:
+                        st.session_state.pr_url = pr
+                        add_log(f"🔀 [pr_create] PR created: {pr}", "success")
+                elif node_name == "pr_wait_approval":
+                    merged = node_state.get("pr_merged", False)
+                    add_log(f"👤 [pr_wait_approval] PR {'merged ✅' if merged else 'closed/cancelled'}", "success" if merged else "warning")
+                elif node_name == "deployment":
+                    url = node_state.get("workflow_run_url")
+                    if url:
+                        st.session_state.workflow_run_url = url
+                        add_log(f"🚀 [deployment] CD triggered: {url}", "success")
+                elif node_name == "post_deployment_verification":
+                    healthy = node_state.get("post_deployment_healthy", False)
+                    add_log(f"🔍 [post_deploy] Job health: {'✅ HEALTHY' if healthy else '❌ STILL FAILING'}", "success" if healthy else "error")
+                elif node_name == "final_confirmation_email":
+                    add_log("🎉 [final_email] Full cycle complete — confirmation email sent!", "success")
+                elif node_name == "deployment_failed_email":
+                    add_log("🚨 [escalation_email] Post-deploy still failing — escalation email sent!", "error")
+                else:
+                    add_log(f"📍 [{node_name}] Completed", "info")
+                
                 if "pr_url" in node_state and node_state["pr_url"]:
                     st.session_state.pr_url = node_state["pr_url"]
-                    add_log(f"🔗 PR Created: {node_state['pr_url']}", "success")
-                
                 if "workflow_run_url" in node_state and node_state["workflow_run_url"]:
                     st.session_state.workflow_run_url = node_state["workflow_run_url"]
-                    add_log(f"🚀 Deployment: {node_state['workflow_run_url']}", "success")
-                
                 if "mttr_seconds" in node_state:
                     st.session_state.mttr_seconds = node_state["mttr_seconds"]
-                
                 if "emails_sent" in node_state:
                     st.session_state.email_count = len(node_state["emails_sent"])
                 
-                # Store final state
                 st.session_state.workflow_state = node_state
         
         # Workflow complete
         elapsed = time.time() - st.session_state.start_time
-        add_log(f"✅ Workflow completed in {elapsed:.0f}s", "success")
+        has_failures = final_state.get("has_failures", False)
+        post_healthy = final_state.get("post_deployment_healthy", False)
+        
+        if not has_failures:
+            outcome = "healthy"
+            outcome_label = "✅ Job was already healthy — no action needed"
+            add_log(f"✅ Workflow complete in {elapsed:.0f}s — Job is HEALTHY, Stage 1 email sent.", "success")
+        elif post_healthy:
+            outcome = "healed"
+            outcome_label = f"🎉 Incident auto-healed in {elapsed:.0f}s (MTTR)"
+            add_log(f"🎉 Workflow complete in {elapsed:.0f}s — HEALED!", "success")
+        else:
+            outcome = "failed"
+            outcome_label = "❌ Could not fully heal — escalation email sent"
+            add_log(f"❌ Workflow complete in {elapsed:.0f}s — still failing after deployment.", "error")
+        
+        # Build last run summary
+        reports = final_state.get("job_health_reports", [])
+        st.session_state.last_run_result = {
+            "outcome": outcome,
+            "outcome_label": outcome_label,
+            "elapsed": elapsed,
+            "has_failures": has_failures,
+            "healthy_count": final_state.get("healthy_count", 0),
+            "failed_count": final_state.get("failed_count", 0),
+            "job_health_reports": reports,
+            "emails_sent": final_state.get("emails_sent", []),
+            "nodes_completed": len(st.session_state.completed_nodes),
+            "pr_url": st.session_state.pr_url,
+            "root_cause": final_state.get("root_cause"),
+            "confidence": final_state.get("confidence", 0),
+        }
+        st.session_state.workflow_completed_at = time.time()
         
         # Add to history
         st.session_state.incidents_history.append({
             "timestamp": datetime.now().isoformat(),
-            "job_id": selected_job_id,
-            "status": "healed" if st.session_state.workflow_state.get("post_deployment_healthy") else "failed",
+            "job_id": ",".join(map(str, selected_job_ids)),
+            "status": outcome,
             "mttr": elapsed,
             "pr_url": st.session_state.pr_url
         })
+        
+        # Re-fetch job status to show updated state
+        add_log("🔄 Refreshing job status...", "info")
+        updated_jobs = fetch_databricks_jobs()
+        for job in updated_jobs:
+            if job["job_id"] in selected_job_ids:
+                st.session_state.monitored_jobs_status[job["job_id"]] = job
+        add_log(f"✅ Refreshed status for {len(selected_job_ids)} job(s)", "success")
         
     except Exception as e:
         add_log(f"❌ Workflow error: {str(e)}", "error")
@@ -461,25 +568,37 @@ with st.sidebar:
     
     # Job Selection
     st.markdown("#### 📋 Job Selection")
-    if st.button("🔄 Refresh Jobs", use_container_width=True):
+    if st.button("🔄 Refresh Jobs", use_container_width=True, disabled=st.session_state.workflow_running):
         st.session_state.available_jobs = fetch_databricks_jobs()
         add_log("Jobs refreshed", "info")
+        st.rerun()
     
     if not st.session_state.available_jobs:
         st.session_state.available_jobs = fetch_databricks_jobs()
     
     if st.session_state.available_jobs:
-        job_options = ["all"] + [f"{j['job_id']} - {j['name'][:40]}" for j in st.session_state.available_jobs]
-        selected = st.selectbox(
-            "Select Job to Monitor",
-            job_options,
-            disabled=st.session_state.workflow_running
+        # Multi-select for jobs
+        job_options = {f"{j['job_id']}": f"{j['name'][:50]}" for j in st.session_state.available_jobs}
+        
+        selected_labels = st.multiselect(
+            "Select Job(s) to Monitor",
+            options=list(job_options.keys()),
+            format_func=lambda x: f"{x} - {job_options[x]}",
+            disabled=st.session_state.workflow_running,
+            default=st.session_state.selected_job_ids if st.session_state.selected_job_ids else []
         )
         
-        if selected == "all":
-            st.session_state.selected_job_id = "all"
-        else:
-            st.session_state.selected_job_id = selected.split(" - ")[0]
+        st.session_state.selected_job_ids = [int(jid) for jid in selected_labels]
+        
+        if st.session_state.selected_job_ids:
+            # Show count and failed status
+            selected_job_data = [j for j in st.session_state.available_jobs if j["job_id"] in st.session_state.selected_job_ids]
+            failed_count = sum(1 for j in selected_job_data if j.get("is_failed", False))
+            
+            if failed_count > 0:
+                st.warning(f"⚠️ {failed_count} of {len(st.session_state.selected_job_ids)} job(s) in FAILED state")
+            else:
+                st.success(f"✅ All {len(st.session_state.selected_job_ids)} selected job(s) healthy")
     else:
         st.warning("No jobs found. Click 'Refresh Jobs'.")
     
@@ -489,15 +608,21 @@ with st.sidebar:
     st.markdown("#### ⚡ Workflow Control")
     
     if not st.session_state.workflow_running:
-        if st.button("🚀 Start AEGIS", type="primary", use_container_width=True, disabled=not st.session_state.selected_job_id):
+        if st.button("🚀 Start Monitoring", type="primary", use_container_width=True, disabled=len(st.session_state.selected_job_ids) == 0):
             st.session_state.workflow_running = True
             st.session_state.workflow_logs = []
             st.session_state.completed_nodes = []
+            st.session_state.last_run_result = None
+            
+            # Store initial status
+            for job in st.session_state.available_jobs:
+                if job["job_id"] in st.session_state.selected_job_ids:
+                    st.session_state.monitored_jobs_status[job["job_id"]] = job
             
             # Run workflow in background thread
             thread = threading.Thread(
                 target=run_aegis_workflow_thread,
-                args=(st.session_state.selected_job_id,),
+                args=(st.session_state.selected_job_ids,),
                 daemon=True
             )
             thread.start()
@@ -515,35 +640,21 @@ with st.sidebar:
     st.markdown("#### ⚙️ Configuration")
     st.info(f"""
     **Databricks**  
-    🔗 {config['databricks']['host']}
+    🔗 {os.getenv('DATABRICKS_HOST', 'N/A')}
     
     **Model**  
     🤖 GPT-5.5 (EPAM DIAL)
     
     **GitHub**  
-    📦 {config['github']['repo']}
+    📦 {os.getenv('GITHUB_REPO_NAME', 'aegis')}
     """)
     
     st.markdown("---")
     st.caption("AEGIS v2.0 | 15-Node Workflow")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MAIN CONTENT - TABS
+# MAIN CONTENT - SIMPLIFIED FOCUSED UI
 # ═══════════════════════════════════════════════════════════════════════════
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Live Dashboard",
-    "🔄 Workflow Progress",
-    "📝 Live Logs",
-    "📈 Analytics",
-    "🔗 Resources"
-])
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 1: LIVE DASHBOARD
-# ─────────────────────────────────────────────────────────────────────────────
-
-with tab1:
     # Top metrics
     col1, col2, col3, col4, col5 = st.columns(5)
     
@@ -567,46 +678,108 @@ with tab1:
     
     st.markdown("---")
     
-    # Current Job Info
-    if st.session_state.selected_job_id:
-        st.markdown("### 🎯 Current Monitoring Target")
+    # Selected Jobs Status Table
+    if st.session_state.selected_job_ids:
+        st.markdown("### 📊 Selected Jobs Status")
         
-        if st.session_state.selected_job_id == "all":
-            st.info(f"**Monitoring:** All Jobs ({len(st.session_state.available_jobs)} total)")
-        else:
-            job_info = next((j for j in st.session_state.available_jobs if str(j['job_id']) == st.session_state.selected_job_id), None)
-            if job_info:
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    st.info(f"**Job ID:** {job_info['job_id']}")
-                with col_b:
-                    st.info(f"**Name:** {job_info['name']}")
-                with col_c:
-                    status_emoji = "✅" if job_info['status'] == "SUCCESS" else "❌"
-                    st.info(f"**Status:** {status_emoji} {job_info['status']}")
+        # Get current status for selected jobs
+        selected_jobs_data = []
+        for job in st.session_state.available_jobs:
+            if job["job_id"] in st.session_state.selected_job_ids:
+                selected_jobs_data.append(job)
+        
+        # Display as table
+        if selected_jobs_data:
+            import pandas as pd
+            df = pd.DataFrame([{
+                "Job ID": j["job_id"],
+                "Name": j["name"][:60],
+                "Status": f"{'✅' if j['result_state'] == 'SUCCESS' else '❌'} {j['result_state']}",
+                "Tasks": j["tasks"],
+            } for j in selected_jobs_data])
+            
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Job ID": st.column_config.NumberColumn("Job ID", format="%d"),
+                    "Name": st.column_config.TextColumn("Job Name"),
+                    "Status": st.column_config.TextColumn("Current Status"),
+                    "Tasks": st.column_config.NumberColumn("# Tasks"),
+                }
+            )
     
     st.markdown("---")
     
-    # Real-time Progress Bar
+    # ── Real-time Progress Bar (while running) ────────────────────────────
     if st.session_state.workflow_running:
-        st.markdown("### ⏳ Real-Time Progress")
+        st.markdown("### ⏳ In Progress...")
         progress = len(st.session_state.completed_nodes) / 15
-        st.progress(progress, text=f"Processing: {st.session_state.current_node}")
-        
-        # Show waiting indicator
-        with st.spinner(f"Processing node: {st.session_state.current_node}..."):
-            time.sleep(0.5)  # Small delay for UI responsiveness
+        st.progress(progress, text=f"⚙️ Processing: {st.session_state.current_node}")
+        with st.spinner(f"Running node: {st.session_state.current_node}..."):
+            time.sleep(0.3)
     
-    # Latest Logs Preview
+    # ── Last Run Result (always visible after completion) ─────────────────
+    result = st.session_state.last_run_result
+    if result:
+        outcome = result["outcome"]
+        if outcome == "healthy":
+            banner_color = "#d4edda"
+            border_color = "#28a745"
+            icon = "✅"
+        elif outcome == "healed":
+            banner_color = "#cce5ff"
+            border_color = "#004085"
+            icon = "🎉"
+        else:
+            banner_color = "#f8d7da"
+            border_color = "#721c24"
+            icon = "❌"
+        
+        st.markdown(
+            f'<div style="background:{banner_color};border-left:6px solid {border_color};'
+            f'border-radius:0.8rem;padding:1.2rem 1.5rem;margin:1rem 0;">'
+            f'<h3 style="margin:0;color:{border_color}">{icon} Last Run Result</h3>'
+            f'<p style="margin:0.5rem 0 0;font-size:1.1rem;"><b>{result["outcome_label"]}</b></p>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+        
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Duration", f"{result['elapsed']:.0f}s")
+        r2.metric("Nodes Run", result["nodes_completed"])
+        r3.metric("Emails Sent", len(result.get("emails_sent", [])))
+        r4.metric("Healthy Jobs", result["healthy_count"])
+        
+        # Job health table
+        if result.get("job_health_reports"):
+            st.markdown("**📊 Job Health Reports:**")
+            for r in result["job_health_reports"]:
+                emoji = "✅" if r["status"] == "healthy" else "❌"
+                col_j1, col_j2, col_j3 = st.columns([2, 4, 2])
+                col_j1.write(f"`{r.get('job_id','?')}`")
+                col_j2.write(r.get("job_name", "N/A"))
+                col_j3.write(f"{emoji} {r['status'].upper()}")
+        
+        if outcome != "healthy" and result.get("root_cause"):
+            st.markdown(f"**🔬 Root Cause ({result['confidence']:.0%} confidence):** {result['root_cause']}")
+        
+        if result.get("pr_url"):
+            st.markdown(f'<a href="{result["pr_url"]}" target="_blank" class="url-link">🔀 View PR</a>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # ── Latest Logs Preview ──────────────────────────────────────────────
     st.markdown("### 📋 Latest Activity")
-    recent_logs = st.session_state.workflow_logs[-5:]
+    recent_logs = st.session_state.workflow_logs[-8:]
     
     if recent_logs:
         for log in reversed(recent_logs):
             level_class = f"log-{log['level']}"
             st.markdown(f'<div class="log-entry {level_class}">[{log["timestamp"]}] {log["message"]}</div>', unsafe_allow_html=True)
     else:
-        st.info("No activity yet. Start AEGIS to begin monitoring.")
+        st.info("No activity yet. Select a job from the sidebar and click 🚀 Start AEGIS.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 2: WORKFLOW PROGRESS
@@ -841,8 +1014,9 @@ with tab5:
     st.markdown("#### 🟠 Databricks")
     col1, col2 = st.columns(2)
     
+    db_host = os.getenv('DATABRICKS_HOST', '#')
+    
     with col1:
-        db_host = config['databricks']['host']
         st.markdown(f'<a href="{db_host}" target="_blank" class="url-link">🔗 Open Databricks Workspace</a>', unsafe_allow_html=True)
     
     with col2:
@@ -859,7 +1033,7 @@ with tab5:
     col3, col4 = st.columns(2)
     
     with col3:
-        github_repo = f"https://github.com/{config['github']['owner']}/{config['github']['repo']}"
+        github_repo = f"https://github.com/{os.getenv('GITHUB_REPO_OWNER', 'uday2797')}/{os.getenv('GITHUB_REPO_NAME', 'aegis')}"
         st.markdown(f'<a href="{github_repo}" target="_blank" class="url-link">🔗 Open Repository</a>', unsafe_allow_html=True)
     
     with col4:
@@ -915,6 +1089,10 @@ with tab5:
 # AUTO-REFRESH FOR REAL-TIME UPDATES
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Auto-refresh: while running OR for 10 seconds after completion so final state shows
 if st.session_state.workflow_running:
-    time.sleep(2)  # Refresh every 2 seconds
+    time.sleep(2)
+    st.rerun()
+elif st.session_state.workflow_completed_at and (time.time() - st.session_state.workflow_completed_at) < 10:
+    time.sleep(1)
     st.rerun()
