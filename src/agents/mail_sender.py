@@ -5,7 +5,7 @@ Non-blocking email notifications at each stage of the healing lifecycle.
 Notification Stages:
 1. initial_health_check: All jobs healthy ✅ or Failures detected ⚠️
 2. failure_alert: Detailed failure notification with error traces
-3. fix_in_progress: GPT-4o notebook repair started
+3. fix_in_progress: GPT-5.5 notebook repair started
 4. fix_complete: Job fixed and running successfully
 5. pr_raised: PR created, awaiting manual approval
 6. deployment_complete: CD pipeline finished, all good
@@ -54,6 +54,8 @@ class MailSenderAgent:
         - fix_complete
         - pr_raised
         - deployment_complete
+        - final_confirmation
+        - deployment_failed
         """
         logger.info(f"[MailSender] Sending stage: {stage}")
         
@@ -69,6 +71,10 @@ class MailSenderAgent:
             return await self._send_pr_raised(data)
         elif stage == "deployment_complete":
             return await self._send_deployment_complete(data)
+        elif stage == "final_confirmation":
+            return await self._send_final_confirmation(data)
+        elif stage == "deployment_failed":
+            return await self._send_deployment_failed(data)
         else:
             logger.warning(f"[MailSender] Unknown stage: {stage}")
             return False
@@ -103,6 +109,7 @@ class MailSenderAgent:
         """
         data: {
             "incident_id": str,
+            "job_id": str,
             "job_name": str,
             "error_summary": str,
             "root_cause": str,
@@ -110,19 +117,30 @@ class MailSenderAgent:
         }
         """
         incident_id = data.get("incident_id", "UNKNOWN")
+        job_id = data.get("job_id", "N/A")
         job_name = data.get("job_name", "Unknown Job")
-        error = data.get("error_summary", "No error details")[:500]
+        error = data.get("error_summary", "No error details")[:800]
         root_cause = data.get("root_cause", "Analyzing...")
         confidence = data.get("confidence", 0)
         
         subject = f"[AEGIS] ⚠️ Failure Detected | {incident_id} | {job_name}"
         body = (
-            f"Incident ID: {incident_id}\n"
-            f"Job: {job_name}\n\n"
-            f"Error:\n{error}\n\n"
-            f"Root Cause (GPT-4o analysis):\n{root_cause}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔴 FAILURE DETECTED\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Incident ID: {incident_id}\n"
+            f"🆔 Job ID: {job_id}\n"
+            f"📦 Job Name: {job_name}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ ERROR SUMMARY:\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{error}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔍 ROOT CAUSE (GPT-5.5 Analysis):\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{root_cause}\n"
             f"Confidence: {confidence:.0f}%\n\n"
-            f"AEGIS is now attempting autonomous repair..."
+            f"🔧 AEGIS is now attempting autonomous repair using GPT-5.5..."
         )
         html = self._build_html("⚠️ Failure Detected", body, "#e74c3c")
         return await self._send_email(subject, body, html)
@@ -133,20 +151,23 @@ class MailSenderAgent:
         """
         data: {
             "incident_id": str,
+            "job_id": str,
             "job_name": str,
             "notebooks_to_fix": List[str]
         }
         """
         incident_id = data.get("incident_id", "UNKNOWN")
+        job_id = data.get("job_id", "N/A")
         job_name = data.get("job_name", "Unknown Job")
         notebooks = data.get("notebooks_to_fix", [])
         
         subject = f"[AEGIS] 🔧 Fixing {incident_id} | {job_name}"
         body = (
-            f"AEGIS is autonomously fixing the failure.\n\n"
-            f"Incident: {incident_id}\n"
-            f"Job: {job_name}\n"
-            f"Notebooks being fixed by GPT-4o:\n"
+            f"🔧 AEGIS is autonomously fixing the failure using GPT-5.5\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"🆔 Job ID: {job_id}\n"
+            f"📦 Job: {job_name}\n\n"
+            f"📓 Notebooks being analyzed and fixed by GPT-5.5:\n"
         )
         for nb in notebooks:
             body += f"  - {nb}\n"
@@ -236,6 +257,98 @@ class MailSenderAgent:
             f"🎉 Your system is fully recovered and in sync with GitOps."
         )
         html = self._build_html("🎉 Deployment Complete — All Good", body, "#2ecc71")
+        return await self._send_email(subject, body, html)
+
+    # ─── Stage 7: Final Confirmation (Post-Deployment Verified) ─────────────
+
+    async def _send_final_confirmation(self, data: Dict) -> bool:
+        """
+        data: {
+            "incident_id": str,
+            "job_id": str,
+            "job_name": str,
+            "pr_url": str,
+            "workflow_run_url": str,
+            "post_deployment_healthy": bool,
+            "mttr_seconds": float
+        }
+        """
+        incident_id = data.get("incident_id", "UNKNOWN")
+        job_id = data.get("job_id", "N/A")
+        job_name = data.get("job_name", "Unknown Job")
+        pr_url = data.get("pr_url", "")
+        workflow_url = data.get("workflow_run_url", "")
+        mttr = data.get("mttr_seconds", 0)
+        
+        subject = f"[AEGIS] ✅ COMPLETE | {incident_id} | Job Verified Healthy"
+        body = (
+            f"═══════════════════════════════════════\n"
+            f"✅ AUTONOMOUS HEALING COMPLETE\n"
+            f"═══════════════════════════════════════\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"🆔 Job ID: {job_id}\n"
+            f"📦 Job: {job_name}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔄 FULL CYCLE COMPLETED:\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"1. ✅ Error detected and analyzed (GPT-5.5)\n"
+            f"2. ✅ Notebooks repaired autonomously\n"
+            f"3. ✅ PR created and merged: {pr_url}\n"
+            f"4. ✅ CD workflow deployed: {workflow_url}\n"
+            f"5. ✅ Post-deployment verification: HEALTHY\n\n"
+            f"⏱️ Total MTTR: {mttr:.0f} seconds ({mttr/60:.1f} minutes)\n\n"
+            f"🎉 Your system is fully operational. No further action required.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"AEGIS - Autonomous Excellence Guardian & Intelligent System"
+        )
+        html = self._build_html("✅ Healing Complete — Verified Healthy", body, "#27ae60")
+        return await self._send_email(subject, body, html)
+
+    # ─── Stage 8: Deployment Failed (Post-Deployment Still Unhealthy) ───────
+
+    async def _send_deployment_failed(self, data: Dict) -> bool:
+        """
+        data: {
+            "incident_id": str,
+            "job_id": str,
+            "job_name": str,
+            "pr_url": str,
+            "workflow_run_url": str
+        }
+        """
+        incident_id = data.get("incident_id", "UNKNOWN")
+        job_id = data.get("job_id", "N/A")
+        job_name = data.get("job_name", "Unknown Job")
+        pr_url = data.get("pr_url", "")
+        workflow_url = data.get("workflow_run_url", "")
+        
+        subject = f"[AEGIS] ⚠️ ESCALATION | {incident_id} | Post-Deployment Still Failing"
+        body = (
+            f"═══════════════════════════════════════\n"
+            f"⚠️ MANUAL INTERVENTION REQUIRED\n"
+            f"═══════════════════════════════════════\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"🆔 Job ID: {job_id}\n"
+            f"📦 Job: {job_name}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ POST-DEPLOYMENT VERIFICATION FAILED\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"AEGIS completed the autonomous healing cycle:\n"
+            f"1. ✅ Error detected and analyzed\n"
+            f"2. ✅ Notebooks repaired by GPT-5.5\n"
+            f"3. ✅ PR merged: {pr_url}\n"
+            f"4. ✅ CD deployed: {workflow_url}\n"
+            f"5. ❌ Post-deployment health check: STILL FAILING\n\n"
+            f"🚨 The automated fix was insufficient. The job is still unhealthy after redeployment.\n\n"
+            f"📝 Recommended Actions:\n"
+            f"  - Review the latest job run logs in Databricks\n"
+            f"  - Verify the deployed notebooks match the fix\n"
+            f"  - Check for environment/config issues\n"
+            f"  - Manual debugging may be required\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"AEGIS - Escalating to human operators"
+        )
+        html = self._build_html("⚠️ Post-Deployment Failed — Manual Review Required", body, "#e74c3c")
         return await self._send_email(subject, body, html)
 
     # ─── Helper: Send Email ─────────────────────────────────────────────────

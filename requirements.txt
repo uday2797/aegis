@@ -43,6 +43,7 @@ rich>=13.7.0        # beautiful terminal output
 tenacity>=8.3.0     # retry logic
 pydantic>=2.7.0     # data validation
 loguru>=0.7.0       # structured logging
+tabulate>=0.9.0     # table formatting for job selection
 
 # Dev / Testing
 pytest>=8.2.0

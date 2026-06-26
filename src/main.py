@@ -102,7 +102,7 @@ class AEGISOrchestrator:
                 f"Error     : {incident.error_summary[:300]}\n\n"
                 f"Root Cause: {rca.root_cause}\n"
                 f"Confidence: {rca.confidence:.0f}%\n"
-                f"Action    : GPT-4o notebook repair in progress...\n\n"
+                f"Action    : GPT-5.5 notebook repair in progress...\n\n"
                 f"You will receive another email when the fix is complete."
             )
             await self.reporter.gmail.send_alert(before_subject, before_body)

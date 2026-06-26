@@ -57,8 +57,10 @@ class DeploymentAgent:
         logger.info(f"[Deployment] Waiting for CD workflow triggered by merge {merge_sha[:7]}")
         
         try:
-            # Wait a few seconds for GitHub to create the workflow run
-            await asyncio.sleep(10)
+            # Wait longer for GitHub Actions to register the workflow run
+            # GitHub can take 20-30 seconds to create the workflow run after merge
+            logger.info("[Deployment] Waiting 30s for GitHub Actions to start workflow...")
+            await asyncio.sleep(30)
             
             # Find workflow runs for the merge commit
             workflow_runs = self.repo.get_workflow_runs(
@@ -66,18 +68,23 @@ class DeploymentAgent:
                 branch=self.repo.default_branch,
             )
             
+            # Check last 20 runs to find the one triggered by our merge
             target_run = None
-            for run in workflow_runs[:10]:  # Check last 10 runs
+            for run in list(workflow_runs)[:20]:
                 if run.head_sha == merge_sha:
                     target_run = run
                     break
             
             if not target_run:
-                logger.warning(f"[Deployment] No workflow run found for SHA {merge_sha[:7]} — CD may be running")
+                logger.warning(f"[Deployment] No workflow run found for SHA {merge_sha[:7]} after 30s wait")
+                logger.info("[Deployment] This may be normal if:")
+                logger.info("  1. GitHub Actions is delayed")
+                logger.info("  2. No workflows trigger on this branch")
+                logger.info("  3. Workflow filters exclude the changed files")
                 return {
                     "workflow_run_url": "",
-                    "status": "failure",
-                    "conclusion": "Workflow run not found (may still be queued)",
+                    "status": "not_found",
+                    "conclusion": "No workflow run found (may still be queued or not configured)",
                 }
             
             logger.info(f"[Deployment] Found workflow run #{target_run.id}: {target_run.html_url}")

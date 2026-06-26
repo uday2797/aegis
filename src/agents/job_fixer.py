@@ -92,7 +92,7 @@ class JobFixerAgent:
             # Step 2: Fix each notebook with GPT-4o
             fixed_notebooks = []
             for nb in notebooks:
-                logger.info(f"[JobFixer] GPT-4o fixing: {nb['path']}")
+                logger.info(f"[JobFixer] GPT-5.5 fixing: {nb['path']}")
                 fixed_content = await self._fix_notebook_with_llm(nb["content"], error_summary)
                 
                 # Map to git path
