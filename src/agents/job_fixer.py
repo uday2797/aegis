@@ -47,16 +47,18 @@ class JobFixerAgent:
             request_timeout=60,
         )
 
-    async def fix_job(self, job_id: int, error_summary: str, incident_id: str) -> Dict:
+    async def fix_job(self, job_id: int, error_summary: str, incident_id: str, retry_attempt: int = 1, max_retries: int = 3) -> Dict:
         """
-        Fix a failed job by repairing its notebooks with GPT-4o.
+        Fix a failed job by repairing its notebooks with GPT-5.5.
+        Automatically retries if post-fix run fails (up to max_retries attempts).
         
         Returns:
             {
                 "status": "success" | "failed",
                 "fixed_notebooks": List[{"path": str, "git_path": str, "content": str}],
                 "post_fix_run_id": int,
-                "outcome": str
+                "outcome": str,
+                "retry_attempt": int
             }
         """
         if not self.llm:
@@ -67,7 +69,7 @@ class JobFixerAgent:
                 "outcome": "LLM not available (no DIAL_API_KEY)",
             }
         
-        logger.info(f"[JobFixer] Fixing job {job_id} | incident={incident_id}")
+        logger.info(f"[JobFixer] Fixing job {job_id} | incident={incident_id} | attempt={retry_attempt}/{max_retries}")
         
         try:
             # Step 1: Fetch notebook tasks
@@ -136,15 +138,51 @@ class JobFixerAgent:
                             "status": "success",
                             "fixed_notebooks": fixed_notebooks,
                             "post_fix_run_id": run_id,
-                            "outcome": f"Job run {run_id} completed successfully after LLM repair.",
+                            "outcome": f"Job run {run_id} completed successfully after LLM repair (attempt {retry_attempt}/{max_retries}).",
+                            "retry_attempt": retry_attempt,
                         }
                     else:
-                        return {
-                            "status": "failed",
-                            "fixed_notebooks": fixed_notebooks,
-                            "post_fix_run_id": run_id,
-                            "outcome": f"Post-fix run {run_id} still failed. Manual review required.",
-                        }
+                        # Post-fix run FAILED - should we retry?
+                        if retry_attempt < max_retries:
+                            logger.warning(f"[JobFixer] Post-fix run {run_id} still failed (attempt {retry_attempt}/{max_retries}). Extracting new error and retrying...")
+                            
+                            # Extract NEW error from the latest failed run
+                            await asyncio.sleep(2)  # Brief pause
+                            new_run = self.client.jobs.get_run(run_id=run_id)
+                            new_error_summary = ""
+                            
+                            # Extract error from failed tasks
+                            if new_run.tasks:
+                                for task in new_run.tasks:
+                                    if task.state and task.state.result_state:
+                                        state_val = task.state.result_state.value if hasattr(task.state.result_state, 'value') else str(task.state.result_state)
+                                        if state_val in ("FAILED", "INTERNAL_ERROR"):
+                                            # Get detailed error
+                                            if hasattr(task.state, 'state_message') and task.state.state_message:
+                                                new_error_summary += f"Task {task.task_key}: {task.state.state_message}\n"
+                            
+                            if not new_error_summary:
+                                new_error_summary = f"Run {run_id} failed with result_state={result_state}. No detailed error available."
+                            
+                            logger.info(f"[JobFixer] New error extracted ({len(new_error_summary)} chars). Retrying fix (attempt {retry_attempt + 1}/{max_retries})...")
+                            
+                            # Recursive retry with the NEW error
+                            return await self.fix_job(
+                                job_id=job_id,
+                                error_summary=new_error_summary[:10000],  # Limit size
+                                incident_id=incident_id,
+                                retry_attempt=retry_attempt + 1,
+                                max_retries=max_retries
+                            )
+                        else:
+                            logger.error(f"[JobFixer] Max retries ({max_retries}) reached. Job {job_id} still failing after {retry_attempt} attempts.")
+                            return {
+                                "status": "failed",
+                                "fixed_notebooks": fixed_notebooks,
+                                "post_fix_run_id": run_id,
+                                "outcome": f"Post-fix run {run_id} still failed after {max_retries} attempts. Manual review required.",
+                                "retry_attempt": retry_attempt,
+                            }
             
             # Timeout
             return {
@@ -164,22 +202,45 @@ class JobFixerAgent:
             }
 
     async def _fix_notebook_with_llm(self, notebook_content: str, error_summary: str) -> str:
-        """Use GPT-4o to fix notebook bugs."""
+        """Use GPT-5.5 to comprehensively fix ALL notebook bugs."""
         prompt = (
-            f"A Databricks notebook failed with this PYTHON ERROR:\n\n"
+            f"🚨 CRITICAL PRODUCTION BUG - COMPREHENSIVE NOTEBOOK REPAIR REQUIRED\n\n"
+            f"## Current Failure\n"
+            f"A Databricks data engineering notebook has failed in production.\n\n"
+            f"### Python Error Trace:\n"
             f"```\n{error_summary}\n```\n\n"
-            f"Here is the notebook source code:\n\n"
+            f"### Full Notebook Source Code:\n"
             f"```python\n{notebook_content}\n```\n\n"
-            f"INSTRUCTIONS:\n"
-            f"1. Read the Python error trace carefully\n"
-            f"2. Identify the EXACT line and bug (common issues: import typos, undefined variables, division by zero, type errors)\n"
-            f"3. Fix ALL bugs in the notebook\n"
-            f"4. Keep the Databricks format exactly (# Databricks notebook source header and # COMMAND ---------- separators)\n"
-            f"5. Return ONLY the corrected Python source code\n"
-            f"6. No explanations, no markdown code fences around your response"
+            f"## Your Task: COMPREHENSIVE BUG ANALYSIS & REPAIR\n\n"
+            f"You must perform a COMPLETE audit of this notebook and fix ALL bugs, not just the first error.\n\n"
+            f"### Step 1: Analyze ALL Code\n"
+            f"- Read through EVERY line of the notebook\n"
+            f"- Identify ALL potential bugs (not just what caused the current error)\n"
+            f"- Common bug categories:\n"
+            f"  * Import errors (typos like 'pandsa' instead of 'pandas')\n"
+            f"  * Wrong table/column names (extra letters, typos)\n"
+            f"  * Undefined variables (referenced before assignment)\n"
+            f"  * Division by zero (missing null/zero checks)\n"
+            f"  * Logic errors (reversed conditions like < instead of >=)\n"
+            f"  * Wrong function arguments\n"
+            f"  * Type mismatches\n"
+            f"  * Missing error handling\n\n"
+            f"### Step 2: Fix ALL Bugs\n"
+            f"- Fix EVERY bug you identified (not just the first one)\n"
+            f"- Use correct PySpark/Pandas syntax for data engineering\n"
+            f"- Add proper null/zero checks where needed\n"
+            f"- Ensure logic is correct (filters, aggregations, conditions)\n"
+            f"- Fix all column names and table names\n"
+            f"- Define all variables before use\n\n"
+            f"### Step 3: Return Clean Code\n"
+            f"- Keep exact Databricks format (# Databricks notebook source, # COMMAND ---------- separators)\n"
+            f"- Return ONLY the corrected Python source code\n"
+            f"- NO explanations, NO markdown fences, NO extra text\n"
+            f"- The code must be production-ready and run successfully\n\n"
+            f"⚠️ REMINDER: Fix ALL bugs in one pass. This is autonomous production healing - no human will manually fix remaining issues."
         )
         messages = [
-            SystemMessage(content="You are an expert Databricks/Python engineer. Analyze Python errors carefully and fix notebook bugs precisely. Return only corrected source code."),
+            SystemMessage(content="You are AEGIS, an elite autonomous reliability engineer specializing in Databricks/PySpark data pipelines. You perform comprehensive code audits and fix ALL bugs in production notebooks. You never leave partial fixes - every bug must be resolved in one pass."),
             HumanMessage(content=prompt),
         ]
         response = await self.llm.ainvoke(messages)
