@@ -139,15 +139,15 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     # Run RCA
     rca_agent = RCAAgent(state["config"]["rca"])
     from src.models import DetectedIncident, FailureType
+    from datetime import datetime
     incident = DetectedIncident(
         incident_id=state["current_incident_id"],
-        job_id=state["current_job_id"],
         job_name=state["current_job_name"],
         failure_type=FailureType.TRANSIENT_FAILURE,
         error_summary=state["current_error_summary"],
+        error_logs=state["current_error_summary"],  # Use error_summary as logs
+        timestamp=datetime.utcnow(),
     )
-    from datetime import datetime
-    incident.timestamp = datetime.utcnow()
     
     from src.diagnosis.context_assembler import ContextAssembler
     assembler = ContextAssembler(knowledge_store=None)

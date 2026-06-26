@@ -40,11 +40,11 @@ class JobFixerAgent:
         return AzureChatOpenAI(
             azure_endpoint=os.environ.get("DIAL_API_ENDPOINT", "https://ai-proxy.lab.epam.com"),
             api_key=api_key,
-            azure_deployment=os.environ.get("DIAL_DEPLOYMENT", "gpt-4o"),
+            azure_deployment=os.environ.get("DIAL_DEPLOYMENT", "gpt-5.5-2026-04-24"),
             api_version=os.environ.get("DIAL_API_VERSION", "2025-04-01-preview"),
             temperature=0,
-            max_tokens=2000,
-            request_timeout=30,
+            max_tokens=4000,
+            request_timeout=60,
         )
 
     async def fix_job(self, job_id: int, error_summary: str, incident_id: str) -> Dict:
@@ -166,17 +166,20 @@ class JobFixerAgent:
     async def _fix_notebook_with_llm(self, notebook_content: str, error_summary: str) -> str:
         """Use GPT-4o to fix notebook bugs."""
         prompt = (
-            f"A Databricks notebook failed with the following error:\n\n"
+            f"A Databricks notebook failed with this PYTHON ERROR:\n\n"
             f"```\n{error_summary}\n```\n\n"
-            f"Here is the notebook source:\n\n"
+            f"Here is the notebook source code:\n\n"
             f"```python\n{notebook_content}\n```\n\n"
-            f"Fix ALL bugs. Return ONLY the corrected notebook source, "
-            f"keeping the Databricks format exactly "
-            f"(# Databricks notebook source header and # COMMAND ---------- separators). "
-            f"No explanations, no markdown fences."
+            f"INSTRUCTIONS:\n"
+            f"1. Read the Python error trace carefully\n"
+            f"2. Identify the EXACT line and bug (common issues: import typos, undefined variables, division by zero, type errors)\n"
+            f"3. Fix ALL bugs in the notebook\n"
+            f"4. Keep the Databricks format exactly (# Databricks notebook source header and # COMMAND ---------- separators)\n"
+            f"5. Return ONLY the corrected Python source code\n"
+            f"6. No explanations, no markdown code fences around your response"
         )
         messages = [
-            SystemMessage(content="You are an expert Databricks/Python engineer. Fix notebook bugs and return only the corrected source code."),
+            SystemMessage(content="You are an expert Databricks/Python engineer. Analyze Python errors carefully and fix notebook bugs precisely. Return only corrected source code."),
             HumanMessage(content=prompt),
         ]
         response = await self.llm.ainvoke(messages)

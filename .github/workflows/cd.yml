@@ -2,7 +2,7 @@ name: CD — Deploy to Databricks
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "de_project/**"
 

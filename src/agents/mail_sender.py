@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 
 
 _SMTP_HOST = "smtp.gmail.com"
-_SMTP_PORT = 587
+_SMTP_PORT = 465  # Use SSL port instead of STARTTLS
 
 
 class MailSenderAgent:
@@ -268,9 +268,8 @@ class MailSenderAgent:
         import time
         for attempt in range(1, 3):
             try:
-                with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=30) as smtp:
-                    smtp.ehlo()
-                    smtp.starttls()
+                # Use SMTP_SSL for port 465 (direct SSL connection)
+                with smtplib.SMTP_SSL(_SMTP_HOST, _SMTP_PORT, timeout=30) as smtp:
                     smtp.login(self.sender, self.app_password)
                     smtp.sendmail(self.sender, self.recipients, msg.as_string())
                 return

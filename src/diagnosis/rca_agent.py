@@ -34,39 +34,46 @@ Analyze this production incident and provide root cause analysis:
 
 ## Incident ID: {incident_id}
 ## Job: {job_name}
-## Failure Type (detected): {failure_type}
 ## Timestamp: {timestamp}
+
+## ⚠️ PYTHON ERROR TRACE (MOST IMPORTANT - ANALYZE THIS FIRST):
+{error_logs}
 
 ## Error Summary:
 {error_summary}
 
-## Error Logs (last 100 lines):
-{error_logs}
+---
 
-## Upstream Job Status:
-{upstream_jobs}
+## Additional Context (use only if Python error is unclear):
+- Failure Type (detected): {failure_type}
+- Upstream Job Status: {upstream_jobs}
+- Affected Tables: {affected_tables}
+- Current Metrics: {metrics}
+- Recent Changes: {recent_schema_changes}
+- Similar Past Incidents: {similar_incidents}
 
-## Affected Tables:
-{affected_tables}
+---
 
-## Current Metrics:
-{metrics}
-
-## Recent Changes:
-{recent_schema_changes}
-
-## Similar Past Incidents (from knowledge base):
-{similar_incidents}
+IMPORTANT INSTRUCTIONS:
+1. **START BY ANALYZING THE PYTHON ERROR TRACE ABOVE**
+2. If you see a clear Python exception (ImportError, NameError, SyntaxError, etc.), diagnose based on that
+3. Common Python issues to look for:
+   - Import typos (e.g., "pandas" misspelled as "pandsa")
+   - Undefined variables
+   - Division by zero
+   - Type errors
+   - Index out of range
+4. Only consider "upstream API changes" or "schema drift" if the Python error clearly indicates that
 
 Respond with this exact JSON structure:
 {{
-  "root_cause": "one clear sentence describing the root cause",
-  "confidence": 92,
-  "failure_type": "schema_drift",
+  "root_cause": "one clear sentence describing the ACTUAL root cause from the Python error",
+  "confidence": 95,
+  "failure_type": "transient_failure",
   "risk_level": "low",
-  "recommended_action": "specific action to take",
-  "explanation": "2-3 sentences explaining your reasoning",
-  "prevention": "what code/config change prevents recurrence"
+  "recommended_action": "Fix the specific Python error: [exact fix needed]",
+  "explanation": "The Python error trace shows [specific exception]. This is caused by [specific line/issue].",
+  "prevention": "what code change prevents this exact error"
 }}
 
 risk_level must be: low | medium | high
@@ -102,8 +109,8 @@ class RCAAgent:
             azure_deployment=deployment,
             api_version=api_version,
             temperature=0,
-            max_tokens=1000,
-            request_timeout=20,
+            max_tokens=2000,
+            request_timeout=30,
         )
 
     async def diagnose(self, context: IncidentContext) -> RCAResult:

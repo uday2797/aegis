@@ -98,6 +98,12 @@ class StatusCheckerAgent:
             
             run = runs[0]
             run_id = run.run_id
+            
+            # CRITICAL FIX: list_runs() returns lightweight Run without tasks
+            # We must call get_run() to get full run details including task info
+            logger.debug(f"[StatusChecker] Fetching full run details for run_id={run_id}")
+            run = self.client.jobs.get_run(run_id=run_id)
+            
             state = run.state
             
             # Safe enum access
@@ -156,10 +162,15 @@ class StatusCheckerAgent:
                     try:
                         output = self.client.jobs.get_run_output(run_id=task.run_id)
                         if output.error_trace:
+                            logger.debug(f"[StatusChecker] Extracted error_trace for task '{task.task_key}': {output.error_trace[:500]}...")
                             errors.append(f"Task '{task.task_key}':\n{output.error_trace}")
                         elif output.error:
+                            logger.debug(f"[StatusChecker] Extracted error for task '{task.task_key}': {output.error[:500]}...")
                             errors.append(f"Task '{task.task_key}': {output.error}")
-                    except Exception:
+                        else:
+                            logger.warning(f"[StatusChecker] No error_trace or error field for task '{task.task_key}'")
+                    except Exception as ex:
+                        logger.warning(f"[StatusChecker] Failed to get run output for task '{task.task_key}': {ex}")
                         if task_state.state_message:
                             errors.append(f"Task '{task.task_key}': {task_state.state_message}")
         except Exception as e:
@@ -167,4 +178,5 @@ class StatusCheckerAgent:
             return f"Run failed (error extraction failed: {e})", failed_tasks
         
         error_summary = "\n\n".join(errors) if errors else "Run failed (no detailed error available)"
+        logger.info(f"[StatusChecker] Final error_summary length: {len(error_summary)} chars, failed_tasks: {failed_tasks}")
         return error_summary, failed_tasks
