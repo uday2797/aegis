@@ -655,435 +655,119 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN CONTENT - SIMPLIFIED FOCUSED UI
 # ═══════════════════════════════════════════════════════════════════════════
-    # Top metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
+
+# Top metrics
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    status_emoji = "🟡" if st.session_state.workflow_running else "🟢"
+    status_text = "Running" if st.session_state.workflow_running else "Idle"
+    st.metric("System Status", f"{status_emoji} {status_text}")
+
+with col2:
+    st.metric("Elapsed Time", get_elapsed_time())
+
+with col3:
+    progress_pct = (len(st.session_state.completed_nodes) / 15 * 100) if st.session_state.completed_nodes else 0
+    st.metric("Progress", f"{progress_pct:.0f}%")
+
+with col4:
+    st.metric("Selected Jobs", len(st.session_state.selected_job_ids))
+
+st.markdown("---")
+
+# ══ Selected Jobs Status Table ═══════════════════════════════════════════════
+if st.session_state.selected_job_ids:
+    st.markdown("### 📊 Monitored Jobs")
     
-    with col1:
-        status_emoji = "🟡" if st.session_state.workflow_running else "🟢"
-        status_text = "Running" if st.session_state.workflow_running else "Idle"
-        st.metric("System Status", f"{status_emoji} {status_text}")
+    # Use monitored_jobs_status if available (refreshed after workflow), else use available_jobs
+    if st.session_state.monitored_jobs_status:
+        display_data = list(st.session_state.monitored_jobs_status.values())
+    else:
+        display_data = [j for j in st.session_state.available_jobs if j["job_id"] in st.session_state.selected_job_ids]
     
-    with col2:
-        st.metric("Elapsed Time", get_elapsed_time())
-    
-    with col3:
-        st.metric("Current Node", st.session_state.current_node or "—")
-    
-    with col4:
-        progress_pct = (len(st.session_state.completed_nodes) / 15 * 100) if st.session_state.completed_nodes else 0
-        st.metric("Progress", f"{progress_pct:.0f}%")
-    
-    with col5:
-        st.metric("Emails Sent", st.session_state.email_count)
-    
-    st.markdown("---")
-    
-    # Selected Jobs Status Table
-    if st.session_state.selected_job_ids:
-        st.markdown("### 📊 Selected Jobs Status")
+    if display_data:
+        import pandas as pd
+        df = pd.DataFrame([{
+            "Job ID": str(j["job_id"]),
+            "Name": j["name"][:55],
+            "Status": f"{'✅' if j.get('result_state') == 'SUCCESS' else '❌'} {j.get('result_state', 'UNKNOWN')}",
+            "Tasks": j.get("tasks", 0),
+        } for j in display_data])
         
-        # Get current status for selected jobs
-        selected_jobs_data = []
-        for job in st.session_state.available_jobs:
-            if job["job_id"] in st.session_state.selected_job_ids:
-                selected_jobs_data.append(job)
-        
-        # Display as table
-        if selected_jobs_data:
-            import pandas as pd
-            df = pd.DataFrame([{
-                "Job ID": j["job_id"],
-                "Name": j["name"][:60],
-                "Status": f"{'✅' if j['result_state'] == 'SUCCESS' else '❌'} {j['result_state']}",
-                "Tasks": j["tasks"],
-            } for j in selected_jobs_data])
-            
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Job ID": st.column_config.NumberColumn("Job ID", format="%d"),
-                    "Name": st.column_config.TextColumn("Job Name"),
-                    "Status": st.column_config.TextColumn("Current Status"),
-                    "Tasks": st.column_config.NumberColumn("# Tasks"),
-                }
-            )
-    
-    st.markdown("---")
-    
-    # ── Real-time Progress Bar (while running) ────────────────────────────
-    if st.session_state.workflow_running:
-        st.markdown("### ⏳ In Progress...")
-        progress = len(st.session_state.completed_nodes) / 15
-        st.progress(progress, text=f"⚙️ Processing: {st.session_state.current_node}")
-        with st.spinner(f"Running node: {st.session_state.current_node}..."):
-            time.sleep(0.3)
-    
-    # ── Last Run Result (always visible after completion) ─────────────────
-    result = st.session_state.last_run_result
-    if result:
-        outcome = result["outcome"]
-        if outcome == "healthy":
-            banner_color = "#d4edda"
-            border_color = "#28a745"
-            icon = "✅"
-        elif outcome == "healed":
-            banner_color = "#cce5ff"
-            border_color = "#004085"
-            icon = "🎉"
-        else:
-            banner_color = "#f8d7da"
-            border_color = "#721c24"
-            icon = "❌"
-        
-        st.markdown(
-            f'<div style="background:{banner_color};border-left:6px solid {border_color};'
-            f'border-radius:0.8rem;padding:1.2rem 1.5rem;margin:1rem 0;">'
-            f'<h3 style="margin:0;color:{border_color}">{icon} Last Run Result</h3>'
-            f'<p style="margin:0.5rem 0 0;font-size:1.1rem;"><b>{result["outcome_label"]}</b></p>'
-            f'</div>',
-            unsafe_allow_html=True
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True
         )
-        
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Duration", f"{result['elapsed']:.0f}s")
-        r2.metric("Nodes Run", result["nodes_completed"])
-        r3.metric("Emails Sent", len(result.get("emails_sent", [])))
-        r4.metric("Healthy Jobs", result["healthy_count"])
-        
-        # Job health table
-        if result.get("job_health_reports"):
-            st.markdown("**📊 Job Health Reports:**")
-            for r in result["job_health_reports"]:
-                emoji = "✅" if r["status"] == "healthy" else "❌"
-                col_j1, col_j2, col_j3 = st.columns([2, 4, 2])
-                col_j1.write(f"`{r.get('job_id','?')}`")
-                col_j2.write(r.get("job_name", "N/A"))
-                col_j3.write(f"{emoji} {r['status'].upper()}")
-        
-        if outcome != "healthy" and result.get("root_cause"):
-            st.markdown(f"**🔬 Root Cause ({result['confidence']:.0%} confidence):** {result['root_cause']}")
-        
-        if result.get("pr_url"):
-            st.markdown(f'<a href="{result["pr_url"]}" target="_blank" class="url-link">🔀 View PR</a>', unsafe_allow_html=True)
+else:
+    st.info("👈 Select job(s) from the sidebar to start monitoring")
+
+st.markdown("---")
+
+# ══ Real-time Progress (while running) ═══════════════════════════════════════
+if st.session_state.workflow_running:
+    st.markdown("### ⏳ Workflow In Progress")
+    progress = len(st.session_state.completed_nodes) / 15
+    st.progress(progress, text=f"⚙️ {st.session_state.current_node}")
+    
+    # Workflow nodes completed so far
+    if st.session_state.completed_nodes:
+        with st.expander(f"✅ Completed {len(st.session_state.completed_nodes)} nodes"):
+            for node in st.session_state.completed_nodes:
+                st.write(f"• {node}")
+
+st.markdown("---")
+
+# ══ Last Run Result Banner ═══════════════════════════════════════════════════
+result = st.session_state.last_run_result
+if result:
+    outcome = result["outcome"]
+    if outcome == "healthy":
+        banner_color = "#d4edda"
+        border_color = "#28a745"
+        icon = "✅"
+    elif outcome == "healed":
+        banner_color = "#cce5ff"
+        border_color = "#004085"
+        icon = "🎉"
+    else:
+        banner_color = "#f8d7da"
+        border_color = "#721c24"
+        icon = "❌"
+    
+    st.markdown(
+        f'<div style="background:{banner_color};border-left:6px solid {border_color};'
+        f'border-radius:0.8rem;padding:1.2rem 1.5rem;margin:1rem 0;">'
+        f'<h3 style="margin:0;color:{border_color}">{icon} Last Run Result</h3>'
+        f'<p style="margin:0.5rem 0 0;font-size:1.1rem;"><b>{result["outcome_label"]}</b></p>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+    
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Duration", f"{result['elapsed']:.0f}s")
+    r2.metric("Nodes", result["nodes_completed"])
+    r3.metric("Emails", len(result.get("emails_sent", [])))
+    
+    if outcome != "healthy" and result.get("root_cause"):
+        st.markdown(f"**🔬 Root Cause ({result['confidence']:.0%} confidence):** {result['root_cause']}")
+    
+    if result.get("pr_url"):
+        st.markdown(f'<a href="{result["pr_url"]}" target="_blank" class="url-link">🔀 View PR</a>', unsafe_allow_html=True)
     
     st.markdown("---")
-    
-    # ── Latest Logs Preview ──────────────────────────────────────────────
-    st.markdown("### 📋 Latest Activity")
-    recent_logs = st.session_state.workflow_logs[-8:]
+
+# ══ Live Logs ═════════════════════════════════════════════════════════════════
+with st.expander("📋 View Live Logs", expanded=st.session_state.workflow_running):
+    recent_logs = st.session_state.workflow_logs[-15:]
     
     if recent_logs:
         for log in reversed(recent_logs):
             level_class = f"log-{log['level']}"
             st.markdown(f'<div class="log-entry {level_class}">[{log["timestamp"]}] {log["message"]}</div>', unsafe_allow_html=True)
     else:
-        st.info("No activity yet. Select a job from the sidebar and click 🚀 Start AEGIS.")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 2: WORKFLOW PROGRESS
-# ─────────────────────────────────────────────────────────────────────────────
-
-with tab2:
-    st.markdown("### 🔄 15-Node Workflow Progress")
-    
-    # Define all 15 nodes
-    all_nodes = [
-        "job_selector",
-        "status_check",
-        "initial_email",
-        "failure_alert",
-        "fix_in_progress_email",
-        "job_fixer",
-        "fix_complete_email",
-        "pr_create",
-        "pr_raised_email",
-        "pr_wait_approval",
-        "deployment",
-        "post_deployment_verification",
-        "final_confirmation_email",
-        "deployment_failed_email",
-    ]
-    
-    # Display each node
-    for i, node in enumerate(all_nodes, 1):
-        if node in st.session_state.completed_nodes:
-            st.markdown(f'<div class="stage-complete">✅ {i}. {node}</div>', unsafe_allow_html=True)
-        elif node == st.session_state.current_node:
-            st.markdown(f'<div class="stage-active">⏳ {i}. {node} (In Progress...)</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="stage-pending">⏸️ {i}. {node}</div>', unsafe_allow_html=True)
-    
-    # Workflow visualization
-    st.markdown("---")
-    st.markdown("### 📊 Workflow Flow Diagram")
-    
-    # Create flow chart
-    fig = go.Figure()
-    
-    # Add nodes
-    completed_count = len(st.session_state.completed_nodes)
-    total_count = 15
-    
-    fig.add_trace(go.Indicator(
-        mode="gauge+number+delta",
-        value=completed_count,
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': "Nodes Completed", 'font': {'size': 24}},
-        delta={'reference': total_count, 'increasing': {'color': "green"}},
-        gauge={
-            'axis': {'range': [None, total_count], 'tickwidth': 1},
-            'bar': {'color': "darkblue"},
-            'bgcolor': "white",
-            'borderwidth': 2,
-            'bordercolor': "gray",
-            'steps': [
-                {'range': [0, total_count/3], 'color': '#f0f4f8'},
-                {'range': [total_count/3, 2*total_count/3], 'color': '#d9e2ec'},
-                {'range': [2*total_count/3, total_count], 'color': '#bcccdc'}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': total_count
-            }
-        }
-    ))
-    
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={'color': "#334e68", 'family': "Arial"},
-        height=300
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 3: LIVE LOGS
-# ─────────────────────────────────────────────────────────────────────────────
-
-with tab3:
-    st.markdown("### 📝 Real-Time Logs")
-    
-    # Log filter
-    log_filter = st.multiselect(
-        "Filter by Level",
-        ["info", "success", "warning", "error"],
-        default=["info", "success", "warning", "error"]
-    )
-    
-    st.markdown("---")
-    
-    # Display logs
-    log_container = st.container(height=600)
-    
-    with log_container:
-        filtered_logs = [log for log in st.session_state.workflow_logs if log["level"] in log_filter]
-        
-        if filtered_logs:
-            for log in reversed(filtered_logs):
-                level_class = f"log-{log['level']}"
-                st.markdown(f'<div class="log-entry {level_class}">[{log["timestamp"]}] {log["message"]}</div>', unsafe_allow_html=True)
-        else:
-            st.info("No logs match the selected filters.")
-    
-    # Clear logs button
-    if st.button("🗑️ Clear Logs"):
-        st.session_state.workflow_logs = []
-        st.rerun()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 4: ANALYTICS
-# ─────────────────────────────────────────────────────────────────────────────
-
-with tab4:
-    st.markdown("### 📈 Historical Analytics")
-    
-    if st.session_state.incidents_history:
-        # Metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        total_incidents = len(st.session_state.incidents_history)
-        healed = len([i for i in st.session_state.incidents_history if i["status"] == "healed"])
-        avg_mttr = sum(i["mttr"] for i in st.session_state.incidents_history) / total_incidents
-        heal_rate = (healed / total_incidents * 100)
-        
-        with col1:
-            st.metric("Total Incidents", total_incidents)
-        with col2:
-            st.metric("Auto-Healed", f"{healed} ({heal_rate:.0f}%)")
-        with col3:
-            st.metric("Avg MTTR", f"{avg_mttr:.0f}s")
-        with col4:
-            st.metric("Success Rate", f"{heal_rate:.0f}%")
-        
-        st.markdown("---")
-        
-        # MTTR over time
-        st.markdown("#### ⏱️ MTTR Over Time")
-        
-        mttr_data = [
-            {"Incident": f"#{i+1}", "MTTR (seconds)": inc["mttr"]}
-            for i, inc in enumerate(st.session_state.incidents_history)
-        ]
-        
-        fig_mttr = px.line(
-            mttr_data,
-            x="Incident",
-            y="MTTR (seconds)",
-            markers=True,
-            title="Mean Time To Recovery Trend"
-        )
-        fig_mttr.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="white",
-            font={'color': "#334e68"}
-        )
-        st.plotly_chart(fig_mttr, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # Success rate pie chart
-        st.markdown("#### ✅ Healing Success Rate")
-        
-        col_a, col_b = st.columns([2, 1])
-        
-        with col_a:
-            success_data = {
-                "Status": ["Healed", "Failed"],
-                "Count": [
-                    healed,
-                    total_incidents - healed
-                ]
-            }
-            
-            fig_success = px.pie(
-                success_data,
-                values="Count",
-                names="Status",
-                color="Status",
-                color_discrete_map={"Healed": "#38ef7d", "Failed": "#f45c43"}
-            )
-            fig_success.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                font={'color': "#334e68"}
-            )
-            st.plotly_chart(fig_success, use_container_width=True)
-        
-        with col_b:
-            st.markdown("##### 📊 Statistics")
-            st.info(f"""
-            **Total Incidents:** {total_incidents}  
-            **Healed:** {healed}  
-            **Failed:** {total_incidents - healed}  
-            **Success Rate:** {heal_rate:.1f}%  
-            **Avg MTTR:** {avg_mttr:.0f}s
-            """)
-        
-        st.markdown("---")
-        
-        # Incident history table
-        st.markdown("#### 📋 Incident History")
-        
-        history_display = []
-        for i, inc in enumerate(st.session_state.incidents_history, 1):
-            history_display.append({
-                "#": i,
-                "Timestamp": datetime.fromisoformat(inc["timestamp"]).strftime("%Y-%m-%d %H:%M:%S"),
-                "Job ID": inc["job_id"],
-                "Status": "✅ Healed" if inc["status"] == "healed" else "❌ Failed",
-                "MTTR": f"{inc['mttr']:.0f}s",
-                "PR": inc.get("pr_url", "N/A")
-            })
-        
-        st.dataframe(history_display, use_container_width=True)
-        
-    else:
-        st.info("No incident history yet. Complete a workflow run to see analytics.")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 5: RESOURCES & LINKS
-# ─────────────────────────────────────────────────────────────────────────────
-
-with tab5:
-    st.markdown("### 🔗 External Resources & Quick Links")
-    
-    # Databricks
-    st.markdown("#### 🟠 Databricks")
-    col1, col2 = st.columns(2)
-    
-    db_host = os.getenv('DATABRICKS_HOST', '#')
-    
-    with col1:
-        st.markdown(f'<a href="{db_host}" target="_blank" class="url-link">🔗 Open Databricks Workspace</a>', unsafe_allow_html=True)
-    
-    with col2:
-        if st.session_state.selected_job_id and st.session_state.selected_job_id != "all":
-            job_url = f"{db_host}/#job/{st.session_state.selected_job_id}"
-            st.markdown(f'<a href="{job_url}" target="_blank" class="url-link">📊 View Current Job</a>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="url-link" style="background: #cbd5e0; color: #718096;">Select a job first</span>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # GitHub
-    st.markdown("#### 🐙 GitHub")
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        github_repo = f"https://github.com/{os.getenv('GITHUB_REPO_OWNER', 'uday2797')}/{os.getenv('GITHUB_REPO_NAME', 'aegis')}"
-        st.markdown(f'<a href="{github_repo}" target="_blank" class="url-link">🔗 Open Repository</a>', unsafe_allow_html=True)
-    
-    with col4:
-        if st.session_state.pr_url:
-            st.markdown(f'<a href="{st.session_state.pr_url}" target="_blank" class="url-link">🔀 View Active PR</a>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="url-link" style="background: #cbd5e0; color: #718096;">No PR created yet</span>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # GitHub Actions
-    st.markdown("#### ⚙️ GitHub Actions (CD)")
-    if st.session_state.workflow_run_url:
-        st.markdown(f'<a href="{st.session_state.workflow_run_url}" target="_blank" class="url-link">🚀 View Deployment Workflow</a>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="url-link" style="background: #cbd5e0; color: #718096;">No deployment triggered yet</span>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Current Workflow State
-    if st.session_state.workflow_state:
-        st.markdown("#### 📦 Current Workflow State")
-        
-        with st.expander("🔍 View Full State Object"):
-            st.json(st.session_state.workflow_state)
-    
-    st.markdown("---")
-    
-    # Quick Stats
-    st.markdown("#### 📊 Quick Stats")
-    
-    stats_col1, stats_col2, stats_col3 = st.columns(3)
-    
-    with stats_col1:
-        st.info(f"""
-        **Available Jobs**  
-        {len(st.session_state.available_jobs)} total
-        """)
-    
-    with stats_col2:
-        st.info(f"""
-        **Logs Captured**  
-        {len(st.session_state.workflow_logs)} entries
-        """)
-    
-    with stats_col3:
-        st.info(f"""
-        **Incident History**  
-        {len(st.session_state.incidents_history)} incidents
-        """)
+        st.info("No logs yet")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # AUTO-REFRESH FOR REAL-TIME UPDATES
