@@ -13,7 +13,7 @@ Write-Host ""
 
 # Check if streamlit is installed
 try {
-    $streamlitVersion = streamlit --version 2>&1
+    $streamlitVersion = python -m streamlit --version 2>&1
     Write-Host "✅ Streamlit installed: $streamlitVersion" -ForegroundColor Green
 } catch {
     Write-Host "❌ Streamlit not found. Installing..." -ForegroundColor Yellow
@@ -32,4 +32,4 @@ Write-Host "Press Ctrl+C to stop the dashboard" -ForegroundColor DarkGray
 Write-Host ""
 
 # Launch Streamlit
-streamlit run app_aegis_live.py
+python -m streamlit run app_aegis_live.py
