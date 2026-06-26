@@ -12,6 +12,10 @@ from databricks.sdk.service.workspace import ImportFormat, Language
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.guardrails.audit_log import AuditLog
+from src.guardrails.rate_limiter import RateLimiter
+from src.guardrails.validators import validate_python_code, compute_diff
+
 
 class JobFixerAgent:
     """
@@ -76,7 +80,21 @@ class JobFixerAgent:
             }
         
         logger.info(f"[JobFixer] 🔍 Starting AUTONOMOUS repair for job {job_id} | incident={incident_id} | attempt={retry_attempt}/{max_retries}")
+        AuditLog.record("FIX_STARTED", incident_id=incident_id, job_id=job_id, attempt=retry_attempt)
         
+        # ───────────────────────────────────────────────────────────────────
+        # GUARDRAIL #5: RATE LIMITER — check before doing ANY work
+        # ───────────────────────────────────────────────────────────────────
+        allowed, rate_reason = RateLimiter.check(job_id)
+        if not allowed:
+            AuditLog.record("RATE_LIMITED", incident_id=incident_id, job_id=job_id, reason=rate_reason)
+            return {
+                "status": "failed",
+                "fixed_notebooks": [],
+                "post_fix_run_id": None,
+                "outcome": rate_reason,
+            }
+
         try:
             # ═══════════════════════════════════════════════════════════════
             # PHASE 1: DISCOVER DATABRICKS CONTEXT
@@ -100,12 +118,16 @@ class JobFixerAgent:
                     logger.info(f"[JobFixer] ✓ Fetched '{nb_path}' ({len(content)} chars)")
             
             if not notebooks:
+                AuditLog.record("NO_NOTEBOOKS", incident_id=incident_id, job_id=job_id)
                 return {
                     "status": "failed",
                     "fixed_notebooks": [],
                     "post_fix_run_id": None,
                     "outcome": "No notebook tasks found in job",
                 }
+            
+            # Store original content for rollback (Guardrail #3)
+            originals: Dict[str, str] = {nb["path"]: nb["content"] for nb in notebooks}
             
             # ═══════════════════════════════════════════════════════════════
             # PHASE 3: DEEP SCAN & COMPREHENSIVE FIX (ALL BUGS IN ONE PASS)
@@ -122,7 +144,38 @@ class JobFixerAgent:
                     databricks_context=databricks_context,
                     notebook_path=nb['path']
                 )
-                
+
+                # ─── GUARDRAIL #4: LLM Output Validation ─────────────────
+                is_valid, validation_error = validate_python_code(fixed_content, nb['path'])
+                if not is_valid:
+                    logger.error(f"[JobFixer] ❌ GUARDRAIL: LLM output failed syntax check — skipping upload")
+                    AuditLog.record(
+                        "LLM_OUTPUT_INVALID",
+                        incident_id=incident_id,
+                        job_id=job_id,
+                        notebook_path=nb['path'],
+                        error=validation_error,
+                    )
+                    return {
+                        "status": "failed",
+                        "fixed_notebooks": [],
+                        "post_fix_run_id": None,
+                        "outcome": f"LLM produced invalid Python code: {validation_error}",
+                    }
+
+                # ─── GUARDRAIL #2: Notebook Diff Review ──────────────────
+                diff_text = compute_diff(nb["content"], fixed_content, nb['path'])
+                if not diff_text:
+                    logger.warning(f"[JobFixer] ⚠️  GUARDRAIL: No changes detected — LLM returned identical code")
+                    AuditLog.record("NO_DIFF", incident_id=incident_id, job_id=job_id, notebook_path=nb['path'])
+                AuditLog.record(
+                    "DIFF_COMPUTED",
+                    incident_id=incident_id,
+                    job_id=job_id,
+                    notebook_path=nb['path'],
+                    lines_changed=len(diff_text.splitlines()),
+                )
+
                 # Map to git path
                 git_path = self._map_to_git_path(nb["path"], nb["task_key"])
                 fixed_notebooks.append({
@@ -143,12 +196,21 @@ class JobFixerAgent:
                     overwrite=True,
                 )
                 logger.success(f"[JobFixer] Uploaded fixed notebook → {nb['path']}")
+                AuditLog.record(
+                    "NOTEBOOK_UPLOADED",
+                    incident_id=incident_id,
+                    job_id=job_id,
+                    notebook_path=nb['path'],
+                )
             
             # Step 4: Trigger job run and monitor
-            logger.info(f"[JobFixer] Triggering post-fix run for job {job_id}")
+            # ─── GUARDRAIL #5: Record trigger in rate limiter ─────────────
+            RateLimiter.record_trigger(job_id)
+            logger.info(f"[JobFixer] Triggering post-fix run for job {job_id} (remaining quota: {RateLimiter.remaining(job_id)})")
             run = self.client.jobs.run_now(job_id=job_id)
             run_id = run.run_id
             logger.success(f"[JobFixer] Post-fix run triggered: {run_id}")
+            AuditLog.record("RUN_TRIGGERED", incident_id=incident_id, job_id=job_id, run_id=run_id)
             
             # Poll until terminal state
             for _ in range(60):  # max 5 min
@@ -160,6 +222,13 @@ class JobFixerAgent:
                 
                 if life in ("TERMINATED", "INTERNAL_ERROR", "SKIPPED"):
                     if result == "SUCCESS":
+                        AuditLog.record(
+                            "FIX_SUCCESS",
+                            incident_id=incident_id,
+                            job_id=job_id,
+                            run_id=run_id,
+                            attempt=retry_attempt,
+                        )
                         return {
                             "status": "success",
                             "fixed_notebooks": fixed_notebooks,
@@ -168,6 +237,38 @@ class JobFixerAgent:
                             "retry_attempt": retry_attempt,
                         }
                     else:
+                        # ─── GUARDRAIL #3: ROLLBACK on post-fix failure ───
+                        logger.warning(f"[JobFixer] 🔄 GUARDRAIL: Post-fix run failed — rolling back to original notebook")
+                        for nb in fixed_notebooks:
+                            original_content = originals.get(nb["path"])
+                            if original_content:
+                                try:
+                                    encoded_orig = base64.b64encode(original_content.encode("utf-8")).decode("utf-8")
+                                    self.client.workspace.import_(
+                                        path=nb["path"],
+                                        content=encoded_orig,
+                                        format=ImportFormat.SOURCE,
+                                        language=Language.PYTHON,
+                                        overwrite=True,
+                                    )
+                                    logger.success(f"[JobFixer] ✅ Rolled back {nb['path']} to original")
+                                    AuditLog.record(
+                                        "NOTEBOOK_ROLLED_BACK",
+                                        incident_id=incident_id,
+                                        job_id=job_id,
+                                        notebook_path=nb['path'],
+                                        reason=f"post-fix run {run_id} failed",
+                                    )
+                                except Exception as rb_err:
+                                    logger.error(f"[JobFixer] ❌ Rollback failed for {nb['path']}: {rb_err}")
+                                    AuditLog.record(
+                                        "ROLLBACK_FAILED",
+                                        incident_id=incident_id,
+                                        job_id=job_id,
+                                        notebook_path=nb['path'],
+                                        error=str(rb_err),
+                                    )
+
                         # Post-fix run FAILED - should we retry?
                         if retry_attempt < max_retries:
                             logger.warning(f"[JobFixer] Post-fix run {run_id} still failed (attempt {retry_attempt}/{max_retries}). Extracting new error and retrying...")
@@ -202,6 +303,12 @@ class JobFixerAgent:
                             )
                         else:
                             logger.error(f"[JobFixer] Max retries ({max_retries}) reached. Job {job_id} still failing after {retry_attempt} attempts.")
+                            AuditLog.record(
+                                "MAX_RETRIES_EXCEEDED",
+                                incident_id=incident_id,
+                                job_id=job_id,
+                                attempts=retry_attempt,
+                            )
                             return {
                                 "status": "failed",
                                 "fixed_notebooks": fixed_notebooks,
@@ -220,6 +327,7 @@ class JobFixerAgent:
         
         except Exception as e:
             logger.error(f"[JobFixer] Fix failed: {e}")
+            AuditLog.record("FIX_EXCEPTION", incident_id=incident_id, job_id=job_id, error=str(e))
             return {
                 "status": "failed",
                 "fixed_notebooks": [],

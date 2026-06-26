@@ -24,6 +24,10 @@ from src.agents.job_fixer import JobFixerAgent
 from src.agents.pr_manager import PRManagerAgent
 from src.agents.deployment import DeploymentAgent
 from src.diagnosis.rca_agent import RCAAgent
+from src.guardrails.audit_log import AuditLog
+
+# Confidence threshold below which AEGIS escalates instead of auto-fixing
+RCA_CONFIDENCE_THRESHOLD = 70.0  # percent
 
 
 # ─── State Definition ────────────────────────────────────────────────────────
@@ -335,7 +339,36 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     state["root_cause"] = rca.root_cause
     state["confidence"] = rca.confidence
     state["risk_level"] = rca.risk_level.value
-    
+
+    # ─── GUARDRAIL #1: Confidence Gate ──────────────────────────────────
+    # If confidence < threshold, escalate to human instead of auto-fixing
+    if rca.confidence < RCA_CONFIDENCE_THRESHOLD:
+        logger.warning(
+            f"[Workflow] ❌ GUARDRAIL: RCA confidence {rca.confidence:.0f}% < {RCA_CONFIDENCE_THRESHOLD}% threshold. "
+            f"Escalating to human instead of autonomous fix."
+        )
+        AuditLog.record(
+            "CONFIDENCE_GATE_BLOCKED",
+            incident_id=state["current_incident_id"],
+            job_id=state["current_job_id"],
+            confidence=rca.confidence,
+            threshold=RCA_CONFIDENCE_THRESHOLD,
+            root_cause=rca.root_cause,
+        )
+        state["fix_status"] = "escalated"
+        state["current_stage"] = "escalated_low_confidence"
+    else:
+        logger.success(
+            f"[Workflow] ✅ GUARDRAIL: RCA confidence {rca.confidence:.0f}% ≥ {RCA_CONFIDENCE_THRESHOLD}% — proceeding with autonomous fix"
+        )
+        AuditLog.record(
+            "CONFIDENCE_GATE_PASSED",
+            incident_id=state["current_incident_id"],
+            job_id=state["current_job_id"],
+            confidence=rca.confidence,
+            root_cause=rca.root_cause,
+        )
+
     # Send failure alert email
     mail_agent = MailSenderAgent()
     await mail_agent.send_stage("failure_alert", {
@@ -560,6 +593,13 @@ async def deployment_failed_email_node(state: AEGISState) -> AEGISState:
 # ─── Conditional Edge Functions ─────────────────────────────────────────────
 
 
+def route_after_rca(state: AEGISState) -> Literal["fix_flow", "escalate_confidence"]:
+    """GUARDRAIL #1: Route based on RCA confidence and escalation flag."""
+    if state.get("fix_status") == "escalated":
+        return "escalate_confidence"
+    return "fix_flow"
+
+
 def route_after_initial_email(state: AEGISState) -> Literal["fix_flow", "end"]:
     """Route based on whether failures exist."""
     if state["has_failures"]:
@@ -637,8 +677,16 @@ def build_aegis_workflow() -> StateGraph:
             "end": END,
         },
     )
-    
-    workflow.add_edge("failure_alert", "fix_in_progress_email")
+
+    # GUARDRAIL #1: confidence gate — failure_alert sets fix_status="escalated" when low confidence
+    workflow.add_conditional_edges(
+        "failure_alert",
+        route_after_rca,
+        {
+            "fix_flow": "fix_in_progress_email",
+            "escalate_confidence": "deployment_failed_email",  # reuse escalation email
+        },
+    )
     workflow.add_edge("fix_in_progress_email", "job_fixer")
     
     workflow.add_conditional_edges(
