@@ -202,47 +202,86 @@ class JobFixerAgent:
             }
 
     async def _fix_notebook_with_llm(self, notebook_content: str, error_summary: str) -> str:
-        """Use GPT-5.5 to comprehensively fix ALL notebook bugs."""
+        """Use GPT-5.5 to comprehensively scan and fix ALL notebook bugs in ONE comprehensive fix."""
         prompt = (
-            f"🚨 CRITICAL PRODUCTION BUG - COMPREHENSIVE NOTEBOOK REPAIR REQUIRED\n\n"
-            f"## Current Failure\n"
-            f"A Databricks data engineering notebook has failed in production.\n\n"
-            f"### Python Error Trace:\n"
+            f"🚨 CRITICAL: AUTONOMOUS PRODUCTION NOTEBOOK REPAIR\n\n"
+            f"## Mission\n"
+            f"A Databricks notebook has failed in production. You must perform a DEEP SCAN of the ENTIRE notebook "
+            f"and fix ALL bugs in ONE comprehensive repair - not just the immediate error.\n\n"
+            f"## Current Error That Triggered This Scan\n"
             f"```\n{error_summary}\n```\n\n"
-            f"### Full Notebook Source Code:\n"
+            f"## Full Notebook Source Code (SCAN EVERY LINE)\n"
             f"```python\n{notebook_content}\n```\n\n"
-            f"## Your Task: COMPREHENSIVE BUG ANALYSIS & REPAIR\n\n"
-            f"You must perform a COMPLETE audit of this notebook and fix ALL bugs, not just the first error.\n\n"
-            f"### Step 1: Analyze ALL Code\n"
-            f"- Read through EVERY line of the notebook\n"
-            f"- Identify ALL potential bugs (not just what caused the current error)\n"
-            f"- Common bug categories:\n"
-            f"  * Import errors (typos like 'pandsa' instead of 'pandas')\n"
-            f"  * Wrong table/column names (extra letters, typos)\n"
-            f"  * Undefined variables (referenced before assignment)\n"
-            f"  * Division by zero (missing null/zero checks)\n"
-            f"  * Logic errors (reversed conditions like < instead of >=)\n"
-            f"  * Wrong function arguments\n"
-            f"  * Type mismatches\n"
-            f"  * Missing error handling\n\n"
-            f"### Step 2: Fix ALL Bugs\n"
-            f"- Fix EVERY bug you identified (not just the first one)\n"
-            f"- Use correct PySpark/Pandas syntax for data engineering\n"
-            f"- Add proper null/zero checks where needed\n"
-            f"- Ensure logic is correct (filters, aggregations, conditions)\n"
-            f"- Fix all column names and table names\n"
-            f"- Define all variables before use\n\n"
-            f"### Step 3: Return Clean Code\n"
-            f"- Keep exact Databricks format (# Databricks notebook source, # COMMAND ---------- separators)\n"
-            f"- Return ONLY the corrected Python source code\n"
-            f"- NO explanations, NO markdown fences, NO extra text\n"
-            f"- The code must be production-ready and run successfully\n\n"
-            f"⚠️ REMINDER: Fix ALL bugs in one pass. This is autonomous production healing - no human will manually fix remaining issues."
+            f"## MANDATORY WORKFLOW\n\n"
+            f"### PHASE 1: DEEP CODE SCAN (Find ALL Bugs)\n"
+            f"Scan EVERY single line and identify ALL bugs, not just what caused the current error.\n\n"
+            f"**Bug Categories to Check:**\n"
+            f"1. **Import Errors**\n"
+            f"   - Typos in module names (e.g., 'pandsa' → 'pandas')\n"
+            f"   - Missing imports\n"
+            f"   - Wrong import paths\n\n"
+            f"2. **Table/Column Name Errors**\n"
+            f"   - Typos in table names (e.g., 'transformed_sales_dataa' with extra 'a')\n"
+            f"   - Wrong column references (e.g., 'price' when it should be 'unit_price')\n"
+            f"   - Case sensitivity issues\n\n"
+            f"3. **Undefined Variables**\n"
+            f"   - Variables used before being defined\n"
+            f"   - Misspelled variable names\n"
+            f"   - Wrong scope references\n\n"
+            f"4. **Math/Division Errors**\n"
+            f"   - Division by zero (e.g., `x / quantity` when quantity can be 0)\n"
+            f"   - Missing null checks\n"
+            f"   - Literal zero in denominator (e.g., `100 / 0`)\n\n"
+            f"5. **Logic Errors**\n"
+            f"   - Reversed conditions (e.g., `< 1000` when it should be `>= 1000`)\n"
+            f"   - Wrong boolean operators (AND vs OR)\n"
+            f"   - Incorrect filter logic\n\n"
+            f"6. **Data Aggregation Errors**\n"
+            f"   - Wrong groupBy columns (e.g., grouping by 'customer_name' instead of 'customer_id')\n"
+            f"   - Missing aggregate functions\n"
+            f"   - Wrong column aliases\n\n"
+            f"7. **PySpark/DataFrame Errors**\n"
+            f"   - Wrong Spark function syntax\n"
+            f"   - Missing F.col() wrappers\n"
+            f"   - Incorrect .withColumn() usage\n\n"
+            f"8. **File Path Errors**\n"
+            f"   - Wrong output paths\n"
+            f"   - Missing /mnt/ prefixes\n"
+            f"   - Incorrect Delta Lake paths\n\n"
+            f"### PHASE 2: FIX ALL BUGS (Not Just One)\n"
+            f"Generate corrected code that fixes EVERY bug you found.\n\n"
+            f"**Requirements:**\n"
+            f"✅ Fix ALL imports (correct all typos)\n"
+            f"✅ Fix ALL table/column names (remove typos, use correct names)\n"
+            f"✅ Define ALL variables before use\n"
+            f"✅ Add null/zero checks for ALL divisions\n"
+            f"✅ Correct ALL logic errors (filters, conditions, operators)\n"
+            f"✅ Fix ALL aggregation functions (correct groupBy, correct columns)\n"
+            f"✅ Use proper PySpark syntax throughout\n"
+            f"✅ Ensure the notebook will run from start to finish without ANY errors\n\n"
+            f"### PHASE 3: OUTPUT FORMAT\n"
+            f"Return ONLY the corrected Python source code with:\n"
+            f"- Exact Databricks format (# Databricks notebook source, # COMMAND ---------- separators)\n"
+            f"- NO explanations\n"
+            f"- NO markdown code fences (```python)\n"
+            f"- NO comments about what you changed\n"
+            f"- JUST the clean, production-ready, bug-free code\n\n"
+            f"⚠️ CRITICAL: This is AUTONOMOUS healing. No human will manually fix remaining bugs. "
+            f"You MUST fix ALL bugs in this ONE pass or the pipeline stays broken. "
+            f"Scan every line. Fix everything. Leave ZERO bugs."
         )
         messages = [
-            SystemMessage(content="You are AEGIS, an elite autonomous reliability engineer specializing in Databricks/PySpark data pipelines. You perform comprehensive code audits and fix ALL bugs in production notebooks. You never leave partial fixes - every bug must be resolved in one pass."),
+            SystemMessage(content=(
+                "You are AEGIS Autonomous Reliability AI. You are an elite code auditor and production debugger. "
+                "When given a notebook, you perform DEEP SCANS and fix ALL bugs in ONE comprehensive pass. "
+                "You never do partial fixes. You scan EVERY line, identify EVERY bug, and fix EVERYTHING at once. "
+                "You have expert knowledge of PySpark, Databricks, Pandas, and data engineering. "
+                "You think like a senior SRE doing a thorough code review - nothing escapes your audit."
+            )),
             HumanMessage(content=prompt),
         ]
+        
+        logger.info(f"[JobFixer] Invoking GPT-5.5 for COMPREHENSIVE notebook scan and repair...")
         response = await self.llm.ainvoke(messages)
         fixed = response.content.strip()
         
@@ -254,6 +293,7 @@ class JobFixerAgent:
                 fixed = fixed[6:]
             fixed = fixed.strip()
         
+        logger.success(f"[JobFixer] GPT-5.5 completed comprehensive repair. Fixed code: {len(fixed)} chars")
         return fixed
 
     def _map_to_git_path(self, databricks_path: str, task_key: str) -> str:
