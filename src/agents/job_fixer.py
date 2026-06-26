@@ -323,7 +323,7 @@ class JobFixerAgent:
                                                 new_error_summary += f"Task {task.task_key}: {task.state.state_message}\n"
                             
                             if not new_error_summary:
-                                new_error_summary = f"Run {run_id} failed with result_state={result_state}. No detailed error available."
+                                new_error_summary = f"Run {run_id} failed with result_state={result}. No detailed error available."
                             
                             logger.info(f"[JobFixer] New error extracted ({len(new_error_summary)} chars). Retrying fix (attempt {retry_attempt + 1}/{max_retries})...")
                             

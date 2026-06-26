@@ -4,15 +4,22 @@ services:
   aegis:
     build: .
     environment:
-      - SIMULATION_MODE=true
-      - AEGIS_ENV=demo
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
-      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
-      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL}
+      - AEGIS_ENV=${AEGIS_ENV:-production}
+      - DATABRICKS_HOST=${DATABRICKS_HOST}
+      - DATABRICKS_TOKEN=${DATABRICKS_TOKEN}
+      - DATABRICKS_JOB_ID=${DATABRICKS_JOB_ID}
+      - DIAL_API_KEY=${DIAL_API_KEY}
+      - DIAL_API_ENDPOINT=${DIAL_API_ENDPOINT:-https://ai-proxy.lab.epam.com}
+      - DIAL_DEPLOYMENT=${DIAL_DEPLOYMENT:-gpt-4o}
+      - DIAL_API_VERSION=${DIAL_API_VERSION:-2025-04-01-preview}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_REPO_OWNER=${GITHUB_REPO_OWNER}
       - GITHUB_REPO_NAME=${GITHUB_REPO_NAME}
+      - GMAIL_SENDER=${GMAIL_SENDER}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
+      - GMAIL_RECIPIENTS=${GMAIL_RECIPIENTS}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
     volumes:
       - ./data:/app/data
-    command: python -m src.main
+    command: python demo/production_multi_agent.py

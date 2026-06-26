@@ -358,7 +358,11 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     )
     
     from src.diagnosis.context_assembler import ContextAssembler
-    assembler = ContextAssembler(knowledge_store=None)
+    assembler = ContextAssembler(
+        knowledge_store=None,
+        workspace_host=state["workspace_host"],
+        workspace_token=state["workspace_token"],
+    )
     context = await assembler.assemble(incident)
     rca = await rca_agent.diagnose(context)
     
@@ -554,8 +558,8 @@ async def post_deployment_verification_node(state: AEGISState) -> AEGISState:
     )
     
     reports = await checker.check_health(
-        all_jobs=False,
-        job_id=int(state["current_job_id"])
+        monitor_all_jobs=False,
+        specific_job_id=str(state["current_job_id"]),
     )
     
     # Check if the job is now healthy
