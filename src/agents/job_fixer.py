@@ -48,7 +48,7 @@ class JobFixerAgent:
             api_version=os.environ.get("DIAL_API_VERSION", "2025-04-01-preview"),
             temperature=0,
             max_tokens=4000,
-            request_timeout=60,
+            request_timeout=300,  # 5 minutes — GPT-5.5 needs time for deep scan
         )
 
     async def fix_job(self, job_id: int, error_summary: str, incident_id: str, retry_attempt: int = 1, max_retries: int = 3) -> Dict:
@@ -484,7 +484,10 @@ class JobFixerAgent:
         ]
         
         logger.info(f"[JobFixer] 🧠 Invoking GPT-5.5 for deep scan + comprehensive fix...")
-        response = await self.llm.ainvoke(messages)
+        try:
+            response = await asyncio.wait_for(self.llm.ainvoke(messages), timeout=300)
+        except asyncio.TimeoutError:
+            raise Exception("GPT-5.5 request timed out after 300s — try again or check VPN/API status")
         full_response = response.content.strip()
         
         # Parse response: extract bug list and fixed code
