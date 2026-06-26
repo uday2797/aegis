@@ -487,7 +487,7 @@ async def pr_wait_approval_node(state: AEGISState) -> AEGISState:
     logger.info("[Workflow] Stage: pr_wait_approval")
     
     agent = PRManagerAgent()
-    result = await agent.wait_for_pr_approval(state["pr_number"], timeout_minutes=60)
+    result = await agent.wait_for_pr_approval(state["pr_number"])
     
     state["pr_merged"] = result["merged"]
     state["merge_sha"] = result["sha"]
