@@ -13,6 +13,35 @@ In production Data and ML systems, most incidents are repetitive and predictable
 
 ---
 
+## 🎯 Quick Start — Live Dashboard
+
+**NEW:** AEGIS now includes a comprehensive real-time Streamlit dashboard!
+
+```powershell
+# Launch the dashboard
+streamlit run app_aegis_live.py
+
+# Or use the launcher script
+.\run_dashboard.ps1
+```
+
+**Dashboard opens at:** http://localhost:8501
+
+### 📊 Dashboard Features
+
+- **🎛️ Job Selection**: Interactive dropdown to select Databricks jobs
+- **🚀 One-Click Start**: Launch full autonomous workflow from UI
+- **📈 Real-Time Progress**: Live tracking through all 15 nodes
+- **📝 Live Logs**: Streaming logs with color-coded levels
+- **📊 Analytics**: MTTR trends, success rates, incident history
+- **🔗 Quick Links**: Direct access to Databricks, GitHub PRs, and deployments
+- **⏱️ Waiting Indicators**: See exactly where AEGIS is in the workflow
+- **🎨 Light Theme**: Visually rich, gradient backgrounds, smooth animations
+
+**See [DASHBOARD_GUIDE.md](docs/DASHBOARD_GUIDE.md) for complete documentation.**
+
+---
+
 ## Solution — The Full Loop
 
 ```
@@ -33,7 +62,7 @@ DETECT → DIAGNOSE → DECIDE → HEAL → NOTIFY → REPORT → LEARN
 
 ## Architecture — Multi-Agent LangGraph Orchestration
 
-AEGIS uses **LangGraph** to orchestrate 5 specialized agents in a state machine workflow. Each agent handles one aspect of the reliability lifecycle, with **6-stage email notifications** providing full visibility.
+AEGIS uses **LangGraph** to orchestrate 6 specialized agents in a state machine workflow. Each agent handles one aspect of the reliability lifecycle, with **8-stage email notifications** providing full visibility.
 
 ### Multi-Agent System
 
@@ -66,24 +95,27 @@ graph TB
     ESCALATE --> END
 ```
 
-### 5 Autonomous Agents
+### 6 Autonomous Agents
 
 | Agent | Responsibility | Key Actions |
 |---|---|---|
 | **StatusCheckerAgent** | Health monitoring | List all DAB jobs, check last run status, extract error traces |
-| **MailSenderAgent** | Notifications | Send 6-stage emails (non-blocking, async) |
-| **JobFixerAgent** | Self-healing | Fetch notebook → GPT-4o repair → upload → verify |
-| **PRManagerAgent** | GitOps sync | Create PR, poll for approval/merge |
+| **MailSenderAgent** | Notifications | Send 8-stage emails (non-blocking, async) |
+| **JobFixerAgent** | Self-healing | Fetch notebook → GPT-5.5 repair → upload → verify |
+| **PRManagerAgent** | GitOps sync | Create PR, poll for approval/merge (indefinite wait) |
 | **DeploymentAgent** | CI/CD automation | Trigger GitHub Actions CD, monitor completion |
+| **PostDeploymentVerifier** | Health re-check | Verify job health after deployment |
 
-### 6-Stage Email Notifications
+### 8-Stage Email Notifications
 
 1. **Initial Health Check** — "All jobs healthy ✅" or "Failures detected ⚠️"
-2. **Failure Alert** — Job name, error trace, GPT-4o RCA, confidence %
-3. **Fix in Progress** — "GPT-4o is fixing notebook X..."
+2. **Failure Alert** — Job name, error trace, GPT-5.5 RCA, confidence %
+3. **Fix in Progress** — "GPT-5.5 is fixing notebook X..."
 4. **Fix Complete** — "Job re-run successful ✅", MTTR
 5. **PR Raised** — PR link, "awaiting manual approval"
-6. **Deployment Complete** — CD workflow finished, all jobs healthy
+6. *(No email during PR wait)*
+7. **Final Confirmation** — "Full cycle complete ✅, job verified healthy"
+8. **Deployment Failed** — "Post-deployment job still failing ❌, escalating to human"
 
 ### LangGraph State Machine
 
