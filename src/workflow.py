@@ -157,6 +157,7 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
         print("\n" + "─" * 100)
         print("📌 Select which job(s) to monitor:")
         print("   • Enter a Job ID to monitor a specific job")
+        print("   • Enter comma-separated Job IDs to monitor multiple jobs: e.g., 123,456,789")
         print("   • Enter 'all' to monitor all jobs")
         print("   • Press Ctrl+C to exit")
         print("─" * 100 + "\n")
@@ -171,6 +172,26 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
                     state["specific_job_id"] = None
                     logger.success(f"[JobSelector] Monitoring ALL {len(all_jobs)} jobs")
                     break
+                elif "," in selection:
+                    # Multiple job IDs (comma-separated)
+                    try:
+                        job_ids = [int(x.strip()) for x in selection.split(",")]
+                        # Verify all jobs exist
+                        valid_job_ids = [jid for jid in job_ids if any(job["job_id"] == jid for job in all_jobs)]
+                        invalid_job_ids = [jid for jid in job_ids if jid not in valid_job_ids]
+                        
+                        if invalid_job_ids:
+                            print(f"❌ Job IDs not found: {', '.join(map(str, invalid_job_ids))}. Please try again.")
+                        elif valid_job_ids:
+                            state["user_selected_job_id"] = ",".join(map(str, valid_job_ids))
+                            state["monitor_all_jobs"] = False
+                            state["specific_job_id"] = None  # Multiple jobs, not single
+                            logger.success(f"[JobSelector] Monitoring {len(valid_job_ids)} jobs: {valid_job_ids}")
+                            break
+                        else:
+                            print("❌ No valid job IDs provided. Please try again.")
+                    except ValueError:
+                        print("❌ Invalid format. Use comma-separated numbers: e.g., 123,456,789")
                 elif selection.isdigit():
                     job_id = int(selection)
                     # Verify job exists
@@ -184,7 +205,7 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
                     else:
                         print(f"❌ Job ID {job_id} not found. Please try again.")
                 else:
-                    print("❌ Invalid input. Enter a Job ID number or 'all'.")
+                    print("❌ Invalid input. Enter Job ID(s) or 'all'.")
             except KeyboardInterrupt:
                 print("\n\n⚠️  Selection cancelled. Exiting AEGIS...")
                 import sys
@@ -213,19 +234,39 @@ async def status_check_node(state: AEGISState) -> AEGISState:
     """Check health of selected job(s) from interactive selection."""
     logger.info("[Workflow] Stage: status_check")
     
-    # Use user's selection from job_selector_node
-    if state.get("user_selected_job_id") == "all":
+    # Parse user's selection from job_selector_node
+    user_selection = state.get("user_selected_job_id") or state.get("specific_job_id")
+    
+    if user_selection == "all":
         monitor_all = True
         specific_job = None
+    elif "," in str(user_selection):
+        # Multiple specific jobs - check each one
+        monitor_all = False
+        specific_job = None
+        # We'll handle multiple jobs below
     else:
         monitor_all = False
-        specific_job = state.get("user_selected_job_id") or state.get("specific_job_id")
+        specific_job = user_selection
     
     agent = StatusCheckerAgent(state["workspace_host"], state["workspace_token"])
-    reports = await agent.check_health(
-        monitor_all_jobs=monitor_all,
-        specific_job_id=str(specific_job) if specific_job else None,
-    )
+    
+    # If user selected multiple specific jobs, check each one
+    if "," in str(user_selection) and user_selection != "all":
+        job_ids = [int(x.strip()) for x in user_selection.split(",")]
+        reports = []
+        for job_id in job_ids:
+            job_reports = await agent.check_health(
+                monitor_all_jobs=False,
+                specific_job_id=str(job_id),
+            )
+            reports.extend(job_reports)
+    else:
+        # Single job or all jobs
+        reports = await agent.check_health(
+            monitor_all_jobs=monitor_all,
+            specific_job_id=str(specific_job) if specific_job else None,
+        )
     
     state["job_health_reports"] = reports
     state["healthy_count"] = sum(1 for r in reports if r["status"] == "healthy")
