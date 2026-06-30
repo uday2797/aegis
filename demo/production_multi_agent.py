@@ -62,6 +62,7 @@ async def main():
         "workspace_host": os.environ["DATABRICKS_HOST"],
         "workspace_token": os.environ["DATABRICKS_TOKEN"],
         "monitor_all_jobs": monitor_all_jobs,
+        "monitor_ml_models": False,  # set by job_selector_node at runtime
         "specific_job_id": specific_job_id,
         "dab_bundle_name": dab_bundle_name if monitor_all_jobs else None,
         "config": config,

@@ -42,6 +42,7 @@ class AEGISState(TypedDict):
     workspace_host: str
     workspace_token: str
     monitor_all_jobs: bool
+    monitor_ml_models: bool
     specific_job_id: str | None
     dab_bundle_name: str | None
     config: dict
@@ -227,9 +228,33 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
                 import sys
                 sys.exit(0)
         
-        print("\n✅ Job selection complete. Starting health monitoring...\n")
+        # ── ML monitoring opt-in ────────────────────────────────────────
+        print("\n" + "─" * 100)
+        print("🤖 ML Model Monitoring (optional):")
+        print("   AEGIS can also check your MLflow-registered models for accuracy drop and data drift.")
+        print("   If drift is detected, it will autonomously trigger retraining via Databricks job.")
+        print("─" * 100)
+        while True:
+            try:
+                ml_choice = input("Monitor ML models? (y/n): ").strip().lower()
+                if ml_choice in ("y", "yes"):
+                    state["monitor_ml_models"] = True
+                    print("✅ ML model monitoring enabled — will check MLflow registry after job check.\n")
+                    break
+                elif ml_choice in ("n", "no"):
+                    state["monitor_ml_models"] = False
+                    print("⏭️  ML model monitoring skipped.\n")
+                    break
+                else:
+                    print("❌ Please enter y or n.")
+            except KeyboardInterrupt:
+                state["monitor_ml_models"] = False
+                print("\n⏭️  ML monitoring skipped.\n")
+                break
+
+        print("✅ Selection complete. Starting health monitoring...\n")
         state["current_stage"] = "job_selected"
-        
+
     except Exception as e:
         logger.error(f"[JobSelector] Failed to list jobs: {e}")
         # Fallback: use configured job_id or monitor all
@@ -241,6 +266,7 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
             logger.warning("[JobSelector] Defaulting to monitor all jobs")
             state["user_selected_job_id"] = "all"
             state["monitor_all_jobs"] = True
+        state.setdefault("monitor_ml_models", False)
         state["current_stage"] = "job_selected"
     
     return state
@@ -289,18 +315,22 @@ async def status_check_node(state: AEGISState) -> AEGISState:
     state["failed_count"] = sum(1 for r in reports if r["status"] == "failed")
     state["has_failures"] = state["failed_count"] > 0
 
-    # ── Model health check ───────────────────────────────────────────────
+    # ── Model health check (only if user opted in) ──────────────────────
     try:
-        model_agent = ModelMonitorAgent(state.get("config", {}))
-        model_reports = await model_agent.check_model_health()
-        state["model_health_reports"] = model_reports
-        degraded = [r for r in model_reports if r.get("status") != "healthy"]
-        if degraded:
-            logger.warning(
-                f"[Workflow] ⚠️  {len(degraded)} model(s) with drift/degradation detected"
-            )
+        if not state.get("monitor_ml_models", False):
+            logger.info("[Workflow] ML monitoring skipped (user opted out)")
+            state["model_health_reports"] = []
         else:
-            logger.success("[Workflow] ✅ All ML models healthy")
+            model_agent = ModelMonitorAgent(state.get("config", {}))
+            model_reports = await model_agent.check_model_health()
+            state["model_health_reports"] = model_reports
+            degraded = [r for r in model_reports if r.get("status") != "healthy"]
+            if degraded:
+                logger.warning(
+                    f"[Workflow] ⚠️  {len(degraded)} model(s) with drift/degradation detected"
+                )
+            else:
+                logger.success("[Workflow] ✅ All ML models healthy")
     except Exception as e:
         logger.warning(f"[Workflow] Model health check skipped: {e}")
         state["model_health_reports"] = []
