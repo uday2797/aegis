@@ -283,15 +283,16 @@ This creates two jobs in your workspace:
 
 ## AI tools used
 
-| Tool | Role |
-|------|------|
-| GPT-5.5 (via EPAM DIAL) | Root cause analysis + notebook repair |
-| LangGraph | 16-node multi-agent state machine orchestration |
-| LangChain AzureChatOpenAI | LLM integration |
-| MLflow | Model registry + drift metrics |
-| ChromaDB | Vector store for past incident memory |
-| Databricks SDK | Real job monitoring, notebook fetch/upload, run triggering |
-| PyGithub | PR creation and polling |
+| Tool | Where used | Purpose |
+|------|-----------|---------|
+| **GPT-5.5** (via EPAM DIAL API) | `src/agents/job_fixer.py`, `src/diagnosis/rca_agent.py` | Root cause analysis + autonomous notebook repair |
+| **LangChain** (`AzureChatOpenAI`) | `src/agents/job_fixer.py`, `src/diagnosis/rca_agent.py` | LLM integration layer for GPT-5.5 calls |
+| **LangGraph** | `src/workflow.py` | 16-node multi-agent state machine orchestrating the entire healing lifecycle |
+| **MLflow** | `src/agents/model_monitor.py`, `src/agents/ml_healer.py`, `de_project/notebooks/ml_model_train.py` | Model registry, drift metrics (accuracy + PSI), model version promotion |
+| **ChromaDB** | `src/knowledge/incident_store.py` | Vector store — persists resolved incidents, retrieves similar past cases to feed GPT-5.5 as context |
+| **Databricks SDK** (`databricks.sdk`) | `src/agents/status_checker.py`, `src/agents/job_fixer.py`, `src/agents/ml_healer.py` | Real job monitoring, notebook fetch/upload, run triggering |
+| **scikit-learn** | `de_project/notebooks/ml_model_train.py` | GradientBoosting model training in the retraining pipeline |
+| **PyGithub** | `src/agents/pr_manager.py` | GitHub PR creation and merge polling |
 
 ---
 
