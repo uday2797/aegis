@@ -90,6 +90,10 @@ class AEGISState(TypedDict):
     # Model health monitoring
     model_health_reports: list[dict]
 
+    # ML healing results
+    ml_degraded_models: list[dict]
+    ml_heal_result: dict | None
+
     # Generated incident report (populated at end of cycle)
     incident_report: dict | None
 
@@ -340,9 +344,10 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     state["current_job_name"] = failed_job["job_name"]
     state["current_error_summary"] = failed_job["error_summary"]
     
-    # Generate incident ID
+    # Generate incident ID (use variable to avoid Python <3.12 nested f-string issue)
     import hashlib
-    state["current_incident_id"] = f"INC-{hashlib.md5(f'{failed_job['job_id']}{failed_job['last_run_id']}'.encode()).hexdigest()[:8].upper()}"
+    _hash_input = f"{failed_job['job_id']}{failed_job['last_run_id']}"
+    state["current_incident_id"] = f"INC-{hashlib.md5(_hash_input.encode()).hexdigest()[:8].upper()}"
     
     # Run RCA
     rca_agent = RCAAgent(state["config"]["rca"])
@@ -358,8 +363,10 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     )
     
     from src.diagnosis.context_assembler import ContextAssembler
+    from src.knowledge.incident_store import IncidentKnowledgeStore
+    _ks = IncidentKnowledgeStore(state["config"].get("knowledge_store", {"persist_dir": "./data/knowledge_store"}))
     assembler = ContextAssembler(
-        knowledge_store=None,
+        knowledge_store=_ks,
         workspace_host=state["workspace_host"],
         workspace_token=state["workspace_token"],
     )
@@ -385,6 +392,15 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
             threshold=RCA_CONFIDENCE_THRESHOLD,
             root_cause=rca.root_cause,
         )
+        # Send escalation email immediately so human is notified with proper context
+        _mail = MailSenderAgent()
+        await _mail.send_stage("escalation", {
+            "incident_id": state["current_incident_id"],
+            "job_name": state["current_job_name"],
+            "confidence": rca.confidence,
+            "root_cause": rca.root_cause,
+            "threshold": RCA_CONFIDENCE_THRESHOLD,
+        })
         state["fix_status"] = "escalated"
         state["current_stage"] = "escalated_low_confidence"
     else:
@@ -439,7 +455,7 @@ async def job_fixer_node(state: AEGISState) -> AEGISState:
     from datetime import datetime
     start_time = datetime.utcnow()
     
-    agent = JobFixerAgent(state["workspace_host"], state["workspace_token"], state["config"]["healing"])
+    agent = JobFixerAgent(state["workspace_host"], state["workspace_token"], state["config"])
     result = await agent.fix_job(
         job_id=int(state["current_job_id"]),
         error_summary=state["current_error_summary"],
@@ -633,6 +649,30 @@ async def deployment_failed_email_node(state: AEGISState) -> AEGISState:
     return state
 
 
+async def ml_healer_node(state: AEGISState) -> AEGISState:
+    """Autonomous ML model retraining and promotion for degraded models."""
+    logger.info("[Workflow] Stage: ml_healer")
+
+    from src.agents.ml_healer import MLHealerAgent
+
+    degraded = [r for r in state.get("model_health_reports", []) if r.get("status") != "healthy"]
+    state["ml_degraded_models"] = degraded
+
+    if not degraded:
+        logger.info("[Workflow] No degraded models — ML healing skipped")
+        state["current_stage"] = "ml_no_drift"
+        return state
+
+    logger.warning(f"[Workflow] {len(degraded)} degraded model(s) — starting ML healing")
+    healer = MLHealerAgent(state["config"])
+    result = await healer.heal(degraded)
+
+    state["ml_heal_result"] = result
+    state["current_stage"] = "ml_healing_complete"
+    logger.info(f"[Workflow] ML healing done | status={result.get('status')} | healed={result.get('healed')}")
+    return state
+
+
 # ─── Conditional Edge Functions ─────────────────────────────────────────────
 
 
@@ -643,10 +683,13 @@ def route_after_rca(state: AEGISState) -> Literal["fix_flow", "escalate_confiden
     return "fix_flow"
 
 
-def route_after_initial_email(state: AEGISState) -> Literal["fix_flow", "end"]:
-    """Route based on whether failures exist."""
+def route_after_initial_email(state: AEGISState) -> Literal["fix_flow", "ml_heal", "end"]:
+    """Route based on job failures or ML model drift."""
     if state["has_failures"]:
         return "fix_flow"
+    degraded = [r for r in state.get("model_health_reports", []) if r.get("status") != "healthy"]
+    if degraded:
+        return "ml_heal"
     return "end"
 
 
@@ -693,6 +736,7 @@ def build_aegis_workflow() -> StateGraph:
     workflow.add_node("job_selector", job_selector_node)
     workflow.add_node("status_check", status_check_node)
     workflow.add_node("initial_email", initial_email_node)
+    workflow.add_node("ml_healer", ml_healer_node)
     workflow.add_node("failure_alert", failure_alert_node)
     workflow.add_node("fix_in_progress_email", fix_in_progress_email_node)
     workflow.add_node("job_fixer", job_fixer_node)
@@ -718,9 +762,11 @@ def build_aegis_workflow() -> StateGraph:
         route_after_initial_email,
         {
             "fix_flow": "failure_alert",
+            "ml_heal": "ml_healer",
             "end": END,
         },
     )
+    workflow.add_edge("ml_healer", "incident_report")
 
     # GUARDRAIL #1: confidence gate — failure_alert sets fix_status="escalated" when low confidence
     workflow.add_conditional_edges(
@@ -728,7 +774,7 @@ def build_aegis_workflow() -> StateGraph:
         route_after_rca,
         {
             "fix_flow": "fix_in_progress_email",
-            "escalate_confidence": "deployment_failed_email",  # reuse escalation email
+            "escalate_confidence": "incident_report",  # email already sent inline in failure_alert_node
         },
     )
     workflow.add_edge("fix_in_progress_email", "job_fixer")

@@ -75,6 +75,14 @@ class MailSenderAgent:
             return await self._send_final_confirmation(data)
         elif stage == "deployment_failed":
             return await self._send_deployment_failed(data)
+        elif stage == "escalation":
+            return await self._send_escalation(data)
+        elif stage == "ml_drift_alert":
+            return await self._send_ml_drift_alert(data)
+        elif stage == "ml_healing_complete":
+            return await self._send_ml_healing_complete(data)
+        elif stage == "ml_healing_failed":
+            return await self._send_ml_healing_failed(data)
         else:
             logger.warning(f"[MailSender] Unknown stage: {stage}")
             return False
@@ -86,21 +94,76 @@ class MailSenderAgent:
         data: {
             "healthy_count": int,
             "failed_count": int,
-            "job_health_reports": List[Dict]
+            "job_health_reports": List[Dict],
+            "model_health_reports": List[Dict]
         }
         """
         healthy = data.get("healthy_count", 0)
         failed = data.get("failed_count", 0)
-        
+        job_reports = data.get("job_health_reports", [])
+        model_reports = data.get("model_health_reports", [])
+        total = healthy + failed
+
+        # ── Build job status table ───────────────────────────────────────
+        job_lines = []
+        for r in job_reports:
+            icon = "✅" if r.get("status") == "healthy" else ("❌" if r.get("status") == "failed" else "⏳")
+            name = r.get("job_name", r.get("job_id", "Unknown"))[:55]
+            status = r.get("status", "unknown").upper()
+            job_lines.append(f"  {icon}  {name:<55}  {status}")
+
+        job_table = "\n".join(job_lines) if job_lines else "  (no jobs monitored)"
+
+        # ── Build model health summary ───────────────────────────────────
+        model_lines = []
+        for m in model_reports:
+            icon = "✅" if m.get("status") == "healthy" else "⚠️"
+            name = m.get("model_name", "unknown")
+            acc = m.get("current_accuracy", 0)
+            psi = m.get("psi_score", 0)
+            alert = m.get("alert") or f"accuracy={acc:.1%}, PSI={psi:.3f}"
+            model_lines.append(f"  {icon}  {name}: {alert}")
+
+        model_section = ""
+        if model_lines:
+            model_section = (
+                "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🤖 ML MODEL HEALTH:\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                + "\n".join(model_lines)
+            )
+
         if failed == 0:
-            subject = "[AEGIS] ✅ All Jobs Healthy"
-            body = f"AEGIS Health Check:\n\n✅ All {healthy} monitored jobs are healthy.\n\nNo action required."
-            html = self._build_html("✅ All Jobs Healthy", body, "#2ecc71")
+            subject = f"[AEGIS] ✅ Health Check Complete | {total} Job(s) Healthy"
+            body = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ AEGIS HEALTH CHECK — ALL CLEAR\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"✅ {healthy} job(s) monitored — all healthy\n\n"
+                f"JOB STATUS:\n"
+                f"{job_table}"
+                f"{model_section}\n\n"
+                f"No action required. AEGIS continues monitoring."
+            )
+            html = self._build_html("✅ All Systems Healthy", body, "#2ecc71")
         else:
-            subject = f"[AEGIS] ⚠️ {failed} Job(s) Failed"
-            body = f"AEGIS Health Check:\n\n⚠️ {failed} job(s) failed out of {healthy + failed} monitored.\n\nAEGIS will now attempt auto-healing..."
-            html = self._build_html("⚠️ Failures Detected", body, "#e74c3c")
-        
+            failed_names = [r.get("job_name", r.get("job_id", "?")) for r in job_reports if r.get("status") == "failed"]
+            subject = f"[AEGIS] ⚠️ {failed} Job(s) Failed — Auto-Healing Started"
+            body = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️  AEGIS HEALTH CHECK — FAILURES DETECTED\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"❌ {failed} FAILED  |  ✅ {healthy} HEALTHY  |  📊 {total} TOTAL\n\n"
+                f"FAILED JOB(S):\n"
+                f"  {chr(10).join('  • ' + n for n in failed_names)}\n\n"
+                f"ALL JOB STATUS:\n"
+                f"{job_table}"
+                f"{model_section}\n\n"
+                f"🔧 AEGIS is now starting autonomous repair using GPT-5.5...\n"
+                f"You will receive a failure analysis email shortly."
+            )
+            html = self._build_html("⚠️ Failures Detected — Auto-Healing Started", body, "#e74c3c")
+
         return await self._send_email(subject, body, html)
 
     # ─── Stage 2: Failure Alert ─────────────────────────────────────────────
@@ -349,6 +412,116 @@ class MailSenderAgent:
             f"AEGIS - Escalating to human operators"
         )
         html = self._build_html("⚠️ Post-Deployment Failed — Manual Review Required", body, "#e74c3c")
+        return await self._send_email(subject, body, html)
+
+    # ─── Escalation: Low Confidence ─────────────────────────────────────────
+
+    async def _send_escalation(self, data: Dict) -> bool:
+        incident_id = data.get("incident_id", "UNKNOWN")
+        job_name = data.get("job_name", "Unknown Job")
+        confidence = data.get("confidence", 0)
+        root_cause = data.get("root_cause", "Could not determine")
+        threshold = data.get("threshold", 70)
+
+        subject = f"[AEGIS] 🚨 ESCALATION | {incident_id} | Low Confidence — Human Required"
+        body = (
+            f"═══════════════════════════════════════\n"
+            f"🚨 AEGIS ESCALATING TO HUMAN OPERATOR\n"
+            f"═══════════════════════════════════════\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"📦 Job: {job_name}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"❌ WHY AEGIS IS NOT AUTO-FIXING:\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"RCA Confidence: {confidence:.0f}% (threshold: {threshold}%)\n"
+            f"AEGIS requires ≥{threshold}% confidence to auto-fix safely.\n\n"
+            f"🔍 BEST GUESS ROOT CAUSE:\n"
+            f"{root_cause}\n\n"
+            f"📝 REQUIRED ACTION:\n"
+            f"  - Review the Databricks job logs manually\n"
+            f"  - Identify root cause and apply fix\n"
+            f"  - Re-run the job once fixed\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"AEGIS — Prioritizing safety over speed"
+        )
+        html = self._build_html("🚨 Escalation — Human Intervention Required", body, "#e67e22")
+        return await self._send_email(subject, body, html)
+
+    # ─── ML Drift Alerts ────────────────────────────────────────────────────
+
+    async def _send_ml_drift_alert(self, data: Dict) -> bool:
+        incident_id = data.get("incident_id", "UNKNOWN")
+        degraded_models = data.get("degraded_models", [])
+
+        model_lines = []
+        for m in degraded_models:
+            model_lines.append(
+                f"  ⚠️  {m.get('model_name')}: {m.get('alert', 'degraded')}"
+            )
+
+        subject = f"[AEGIS] 🤖 ML Drift Detected | {incident_id} | Auto-Retraining Started"
+        body = (
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🤖 AEGIS ML DRIFT DETECTION\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"⚠️  {len(degraded_models)} model(s) showing drift/degradation:\n\n"
+            + "\n".join(model_lines) +
+            f"\n\n🔧 AEGIS is autonomously triggering model retraining on Databricks...\n"
+            f"You will receive a notification when retraining completes."
+        )
+        html = self._build_html("🤖 ML Drift Detected — Retraining Started", body, "#9b59b6")
+        return await self._send_email(subject, body, html)
+
+    async def _send_ml_healing_complete(self, data: Dict) -> bool:
+        incident_id = data.get("incident_id", "UNKNOWN")
+        model_name = data.get("model_name", "Unknown")
+        run_id = data.get("run_id")
+        old_accuracy = data.get("old_accuracy", 0)
+        new_accuracy = data.get("new_accuracy", 0)
+        mttr = data.get("mttr_seconds", 0)
+
+        subject = f"[AEGIS] ✅ ML Retraining Complete | {incident_id} | Model Healthy"
+        body = (
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ AEGIS ML HEALING COMPLETE\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"🤖 Model: {model_name}\n"
+            f"🏃 Retraining Run: {run_id}\n\n"
+            f"📊 ACCURACY IMPROVEMENT:\n"
+            f"  Before: {old_accuracy:.1%}\n"
+            f"  After:  {new_accuracy:.1%}\n"
+            f"  Delta:  +{(new_accuracy - old_accuracy):.1%}\n\n"
+            f"⏱️  MTTR: {mttr:.0f}s ({mttr/60:.1f} min)\n\n"
+            f"✅ Model reregistered and healthy. No further action required."
+        )
+        html = self._build_html("✅ ML Healing Complete", body, "#27ae60")
+        return await self._send_email(subject, body, html)
+
+    async def _send_ml_healing_failed(self, data: Dict) -> bool:
+        incident_id = data.get("incident_id", "UNKNOWN")
+        model_name = data.get("model_name", "Unknown")
+        reason = data.get("reason", "Retraining did not improve model accuracy")
+
+        subject = f"[AEGIS] ⚠️ ML Healing Failed | {incident_id} | Manual Review Required"
+        body = (
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ AEGIS ML HEALING ESCALATION\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Incident: {incident_id}\n"
+            f"🤖 Model: {model_name}\n\n"
+            f"❌ AUTONOMOUS HEALING FAILED:\n"
+            f"{reason}\n\n"
+            f"📝 REQUIRED ACTION:\n"
+            f"  - Review MLflow experiment runs\n"
+            f"  - Check training data quality\n"
+            f"  - Consider manual hyperparameter tuning\n"
+            f"  - Review feature pipeline for data drift\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"AEGIS — Escalating ML incident to human operators"
+        )
+        html = self._build_html("⚠️ ML Healing Failed — Manual Review Required", body, "#e74c3c")
         return await self._send_email(subject, body, html)
 
     # ─── Helper: Send Email ─────────────────────────────────────────────────

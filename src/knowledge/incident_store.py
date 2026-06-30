@@ -125,7 +125,10 @@ class IncidentKnowledgeStore:
         """Retrieves top-k similar past incidents based on semantic similarity."""
         if self._collection:
             try:
-                results = self._collection.query(query_texts=[query], n_results=min(k, self._collection.count()))
+                count = self._collection.count()
+                if count == 0:
+                    return []
+                results = self._collection.query(query_texts=[query], n_results=min(k, count))
                 docs = results.get("documents", [[]])[0]
                 metas = results.get("metadatas", [[]])[0]
                 summaries = []

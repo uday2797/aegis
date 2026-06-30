@@ -93,6 +93,8 @@ async def main():
         "available_jobs": [],
         "user_selected_job_id": None,
         "model_health_reports": [],
+        "ml_degraded_models": [],
+        "ml_heal_result": None,
         "incident_report": None,
         "current_stage": "init",
     }
@@ -119,6 +121,15 @@ async def main():
                 console.print(f"   • {r['model_name']}: {r.get('alert', 'degraded')}")
         else:
             console.print(f"[green]✅ ML Models: all {len(model_reports)} healthy[/green]")
+
+    # ML healing summary
+    ml_result = final_state.get("ml_heal_result")
+    if ml_result:
+        status = ml_result.get("status", "unknown")
+        healed = ml_result.get("healed", [])
+        failed = ml_result.get("failed", [])
+        icon = "✅" if status == "success" else ("⚠️" if status == "partial" else "❌")
+        console.print(f"{icon} ML Healing: {status} | healed={healed} | failed={failed}")
 
     if final_state.get("current_incident_id"):
         console.print(f"Incident: {final_state['current_incident_id']}")

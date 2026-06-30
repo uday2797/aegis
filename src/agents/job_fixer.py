@@ -35,7 +35,9 @@ class JobFixerAgent:
 
     def __init__(self, host: str, token: str, config: dict):
         self.client = WorkspaceClient(host=host, token=token)
+        # config is the FULL config dict; healing sub-config is at config["healing"]
         self.config = config
+        self.healing_config = config.get("healing", config)
         self.llm = self._init_llm()
         logger.info("[JobFixer] Initialized")
 
@@ -378,7 +380,7 @@ class JobFixerAgent:
         try:
             from src.knowledge.incident_store import IncidentKnowledgeStore
             store = IncidentKnowledgeStore(
-                self.config.get("knowledge", {"persist_dir": "./data/knowledge_store"})
+                self.config.get("knowledge_store", {"persist_dir": "./data/knowledge_store", "collection_name": "aegis_incidents"})
             )
             results = store.search(query=error_summary[:500], top_k=3)
             if results:
@@ -675,18 +677,25 @@ class JobFixerAgent:
 
     def _map_to_git_path(self, databricks_path: str, task_key: str) -> str:
         """Map Databricks workspace path to git repository path."""
+        # databricks_to_git_path is a top-level config key
         git_path_map = self.config.get("databricks_to_git_path", {})
-        
+
         # Try direct lookup
         git_path = git_path_map.get(databricks_path)
         if git_path:
             return git_path
-        
-        # Try without .py extension
-        git_path = git_path_map.get(databricks_path.rstrip(".py"))
+
+        # Try without .py extension (removesuffix strips only the exact suffix)
+        git_path = git_path_map.get(databricks_path.removesuffix(".py"))
         if git_path:
             return git_path
-        
+
+        # Try basename match
+        basename = databricks_path.rstrip("/").split("/")[-1].removesuffix(".py")
+        for key, val in git_path_map.items():
+            if key.rstrip("/").split("/")[-1].removesuffix(".py") == basename:
+                return val
+
         # Fallback: use task key
         slug = task_key.replace(" ", "_").replace("-", "_").lower()
         return f"de_project/notebooks/{slug}.py"

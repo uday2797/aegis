@@ -90,13 +90,16 @@ class PRManagerAgent:
                 content = nb["content"]
                 commit_message = f"[AEGIS Auto-Fix] {incident_id}: Fix notebook {git_path}"
                 
+                # PyGithub requires bytes for file content
+                content_bytes = content.encode("utf-8") if isinstance(content, str) else content
+
                 try:
                     # Try update existing file
                     file = self.repo.get_contents(git_path, ref=branch_name)
                     self.repo.update_file(
                         path=git_path,
                         message=commit_message,
-                        content=content,
+                        content=content_bytes,
                         sha=file.sha,
                         branch=branch_name,
                     )
@@ -106,7 +109,7 @@ class PRManagerAgent:
                     self.repo.create_file(
                         path=git_path,
                         message=commit_message,
-                        content=content,
+                        content=content_bytes,
                         branch=branch_name,
                     )
                     logger.success(f"[PRManager] Created {git_path} on {branch_name}")
@@ -175,7 +178,11 @@ class PRManagerAgent:
         if not self.enabled:
             logger.warning("[PRManager] GitHub not configured — cannot poll PR")
             return {"merged": False, "closed": False, "sha": None}
-        
+
+        if not pr_number or pr_number == 0:
+            logger.error("[PRManager] Invalid PR number (0) — cannot poll. PR creation likely failed.")
+            return {"merged": False, "closed": True, "sha": None}
+
         logger.info(f"[PRManager] Waiting for PR #{pr_number} approval (NO TIMEOUT - will wait indefinitely)")
         
         poll_count = 0

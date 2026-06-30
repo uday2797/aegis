@@ -1,0 +1,40 @@
+resources:
+  jobs:
+    aegis_ml_retraining:
+      name: "[AEGIS ML] Model Retraining Pipeline"
+      description: "Triggered by AEGIS MLHealerAgent when model drift is detected. Retrains on fresh data and logs metrics to MLflow."
+
+      tags:
+        project: aegis
+        team: mlops
+        purpose: model-retraining
+        bundle: aegis-de-project
+
+      email_notifications:
+        on_failure:
+          - udays2797@gmail.com
+        on_success:
+          - udays2797@gmail.com
+
+      schedule:
+        # Weekly retraining as a safety net (AEGIS also triggers on-demand)
+        quartz_cron_expression: "0 0 2 ? * SUN"
+        timezone_id: "UTC"
+        pause_status: PAUSED
+
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+
+      tasks:
+        - task_key: ml_model_retrain
+          description: "Trains GradientBoosting model, computes PSI drift score, registers new version in MLflow"
+          notebook_task:
+            notebook_path: ../../notebooks/ml_model_train.py
+            base_parameters:
+              model_name: "sales_forecast_v3"
+              trigger: "${bundle.target}"
+              feature_table: "default.aegis_ml_features"
+              label_col: "target"
+
+          # Use serverless compute (same as failing_job)
+          compute_key: "serverless"

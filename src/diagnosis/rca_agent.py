@@ -152,11 +152,13 @@ class RCAAgent:
         try:
             response = await self.llm.ainvoke(messages)
             raw = response.content.strip()
-            # Strip markdown code fences if present
+            # Strip markdown code fences if present (handles ```json, ```JSON, ``` etc.)
             if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
+                parts = raw.split("```")
+                raw = parts[1] if len(parts) > 1 else raw
+                if raw.lower().startswith("json"):
                     raw = raw[4:]
+                raw = raw.strip()
             data = json.loads(raw)
             return RCAResult(
                 incident_id=context.incident_id,

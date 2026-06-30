@@ -42,6 +42,7 @@ healing:
     enabled: true
   retraining:
     trigger_on_drift: true
+  ml_retraining_job_name: "[AEGIS ML] Model Retraining Pipeline"
 
 reporting:
   teams_enabled: true
@@ -58,6 +59,7 @@ databricks_to_git_path:
   "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/01_ingest": "de_project/notebooks/01_ingest.py"
   "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/02_transform": "de_project/notebooks/02_transform.py"
   "/Users/udays2797@gmail.com/Failing Test Notebook": "de_project/notebooks/failing_notebook.py"
+  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/ml_model_train": "de_project/notebooks/ml_model_train.py"
 
 knowledge_store:
   persist_dir: "./data/knowledge_store"

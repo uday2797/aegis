@@ -12,9 +12,14 @@ on:
       target:
         description: "Deployment target"
         required: true
-        default: "prod"
+        default: "dev"
         type: choice
         options: [dev, prod]
+      confirm_destroy:
+        description: "Type DESTROY to confirm bundle destruction (only needed for destroy job)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   deploy:
@@ -70,12 +75,17 @@ jobs:
       - name: Confirm destroy
         run: |
           echo "⚠️ WARNING: This will destroy all resources in the bundle!"
-          echo "Target: ${{ github.event.inputs.target || 'prod' }}"
+          echo "Target: ${{ github.event.inputs.target || 'dev' }}"
+          if [[ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]]; then
+            echo "❌ Destruction cancelled: confirm_destroy input must be exactly 'DESTROY'"
+            exit 1
+          fi
+          echo "✅ Destruction confirmed."
 
       - name: Destroy bundle
         working-directory: de_project
         run: |
-          TARGET="${{ github.event.inputs.target || 'prod' }}"
+          TARGET="${{ github.event.inputs.target || 'dev' }}"
           echo "=== Destroying AEGIS DE Project Bundle (target=$TARGET) ==="
           databricks bundle destroy --target $TARGET --auto-approve
           echo "=== Destroy complete ==="

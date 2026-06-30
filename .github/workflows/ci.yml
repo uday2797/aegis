@@ -2,7 +2,7 @@ name: CI — Lint & Validate
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, main]
     paths:
       - "de_project/**"
       - "src/**"
@@ -26,6 +26,11 @@ jobs:
           echo "=== Linting notebooks ==="
           FAILED=0
           for nb in de_project/notebooks/*.py; do
+            # failing_notebook.py is intentionally broken — AEGIS uses it as a test target
+            if [[ "$nb" == *"failing_notebook"* ]]; then
+              echo "⏭️  $nb (skipped — intentionally broken for AEGIS demo)"
+              continue
+            fi
             python -m pyflakes "$nb" 2>&1 && echo "✅ $nb" || { echo "❌ $nb"; FAILED=1; }
           done
           exit $FAILED
