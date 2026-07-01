@@ -1,6 +1,9 @@
 bundle:
   name: aegis-de-project
-  # Redeployed to reset failing_notebook to broken state for AEGIS demo
+  # ⚠️  DEPLOYMENT POLICY: Do NOT run `databricks bundle deploy` manually.
+  #    All deployments must go through GitHub Actions (cd.yml).
+  #    Push to master → CD pipeline deploys automatically.
+  #    Manual deploy via workflow_dispatch is available in GitHub UI only.
 
 workspace:
   host: https://dbc-c486d425-ef89.cloud.databricks.com/

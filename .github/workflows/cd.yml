@@ -1,3 +1,8 @@
+# ============================================================
+# SINGLE SOURCE OF TRUTH FOR DATABRICKS DEPLOYMENTS
+# All bundle deploys must go through this workflow only.
+# Never run `databricks bundle deploy` directly from CLI.
+# ============================================================
 name: CD — Deploy to Databricks
 
 on:
