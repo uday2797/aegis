@@ -5,221 +5,266 @@
 **Hackathon:** AI-Autonomous Reliability Engineer | Data DevOps & MLOps Track  
 **Theme:** Self-Healing Data & ML Systems
 
+[![Tests](https://img.shields.io/badge/tests-94%20passed-brightgreen)](#testing)
+[![Guardrails](https://img.shields.io/badge/guardrails-7%20layers-blue)](#guardrails--safety-layers)
+[![LLM](https://img.shields.io/badge/LLM-GPT--5.5%20%7C%20GPT--4o-orange)](#ai-tools-used)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](#setup)
+
 ---
 
-## What problem does this solve?
+## The Problem
 
 Every data engineering team has woken up at 3am because a Databricks job failed. The manual process is painful:
 
-1. Find the failed job in Databricks
-2. Read the error log
-3. Figure out root cause
-4. Write a fix
-5. Test it
-6. Deploy it
-7. Verify it works
-8. Write an incident report
+| Step | Time cost |
+|---|---|
+| 1. Spot the alert | 5–15 min |
+| 2. Find the failed job & read the log | 10–20 min |
+| 3. Understand the root cause | 20–60 min |
+| 4. Write, test, and deploy a fix | 30–90 min |
+| 5. Verify the job passes | 10–20 min |
+| 6. Write the incident report | 15–30 min |
+| **Total MTTR** | **1.5–4 hours** |
 
-**AEGIS automates all of that — jobs, ML models, and everything in between.**
+**AEGIS compresses that entire loop to under 5 minutes — autonomously, for jobs and ML models.**
 
 ---
 
-## What AEGIS is capable of
+## What AEGIS Does
 
 ### Job Self-Healing
 
 - Connects to your real Databricks workspace via the SDK
-- Lists all available jobs and lets you select which ones to monitor (single / multiple / all)
-- Reads the actual error from the failed Databricks run (not predefined patterns)
-- Fetches the actual notebook source code from Databricks
-- Sends the real error + real code to GPT-5.5, which deep-scans the notebook, identifies every bug, and returns a fully fixed version
-- Validates the fix (Python syntax check + lint + PEP8 auto-format) before uploading
-- Uploads the fixed notebook back to Databricks and re-runs the job to verify
-- If the re-run still fails: extracts the new error, retries the fix up to 3 times — each time feeding the latest error back to GPT-5.5
-- If the fix still fails after 3 retries: rolls back the notebook to its original version and escalates to a human
-- If the re-run passes: creates a GitHub PR with the fixed code, waits for your approval, then triggers CD to deploy
+- Lists all available jobs; you select which ones to monitor (single / multiple / all)
+- Reads the **actual error** from the failed Databricks run — not predefined patterns
+- Fetches the **actual notebook source** from Databricks
+- Sends real error + real code to **GPT-5.5**, which deep-scans the notebook, identifies every bug, and returns a fully fixed version
+- Validates the fix (syntax check + lint + PEP8 auto-format) before uploading
+- Uploads the fixed notebook and re-runs the job to verify
+- If re-run fails: extracts the new error, retries the fix up to **3 times**, each time feeding the latest error back to GPT-5.5
+- If all 3 retries fail: **rolls back** the notebook to the original version and escalates to a human
+- If re-run passes: creates a **GitHub PR**, waits for approval, then triggers CD to deploy
 
 ### ML Model Monitoring & Auto-Retraining (opt-in)
 
-At startup, AEGIS asks if you want to monitor ML models. If you say yes:
+At startup, AEGIS asks if you want to monitor ML models. If yes:
 
 - Queries your MLflow registry for all registered Production models
-- Checks accuracy drop vs baseline and PSI (Population Stability Index) for data drift
+- Checks **accuracy drop vs baseline** and **PSI** (Population Stability Index) for data drift
 - If a model is degraded: triggers the `[AEGIS ML] Model Retraining Pipeline` job in Databricks
-- Polls the retraining run until it completes
-- Compares new model accuracy against the old Production version in MLflow
-- If accuracy improved by ≥ 0.5%: promotes the new version to Production stage
-- If accuracy did not improve: keeps the existing model and notifies you
-- Falls back to simulation if MLflow is not configured (useful for demos)
+- Polls until retraining completes, then compares new model accuracy against the old version in MLflow
+- Accuracy improved ≥ 0.5% → promotes new version to Production stage
+- No improvement → keeps existing model and notifies you
+- Falls back to simulation if MLflow is not configured
 
-### Email Notifications (8 stages, non-blocking)
+### Email Notifications — 10 stages, non-blocking
 
-AEGIS sends an email at every stage so you always know what's happening:
+AEGIS sends an email at every stage of the lifecycle:
 
-| Stage | Trigger | What's in it |
-|-------|---------|--------------|
-| 1. Initial Health Check | Startup | Full job status table with icons + ML model health (if opted in) |
-| 2. Failure Alert | Job failure detected | Incident ID, job name, error summary, RCA with confidence score |
-| 3. Fix In Progress | GPT-5.5 repair started | Which notebook is being fixed, incident ID |
-| 4. Fix Complete | Job passed post-fix run | Fixed files, MTTR (time-to-repair) |
-| 5. PR Raised | GitHub PR created | PR URL, what was changed, what to review |
-| 6. Final Confirmation | Post-deploy health passed | Full end-to-end summary |
-| 7. Deployment Failed | Post-deploy job still failing | Escalation to human with details |
-| 8. Escalation | RCA confidence < 70% or max retries exceeded | Root cause, confidence %, what to investigate |
-| ML Healing Complete | Model retrained + promoted | Old vs new accuracy, improvement |
-| ML Healing Failed | Retraining did not improve model | Why model was not promoted |
-
-### Guardrails (safety mechanisms)
-
-| Guardrail | What it does |
-|-----------|-------------|
-| Confidence Gate | If RCA confidence < 70%, AEGIS escalates to human instead of auto-fixing |
-| Syntax Check | Fixed code must pass `ast.parse()` before uploading |
-| Lint Check | Pyflakes lint run on every fix |
-| PEP8 Auto-Format | Code auto-formatted before upload |
-| Diff Review | If LLM returns identical code (no changes), it's flagged |
-| Rollback | If post-fix run fails, original notebook is restored immediately |
-| Rate Limiter | Prevents AEGIS from re-triggering the same job too many times |
-| PR#0 Guard | Never polls GitHub if PR creation failed |
+| Stage | Trigger | Content |
+|---|---|---|
+| 1. Initial Health Check | Startup | Job status table + ML model health |
+| 2. Failure Alert | Job failure detected | Incident ID, RCA, confidence score |
+| 3. Fix In Progress | GPT-5.5 repair started | Notebook being fixed, incident ID |
+| 4. Fix Complete | Job passed post-fix run | Fixed files, MTTR |
+| 5. PR Raised | GitHub PR created | PR URL, what changed, what to review |
+| 6. Final Confirmation | Post-deploy health passed | End-to-end summary |
+| 7. Deployment Failed | Post-deploy job still failing | Escalation details |
+| 8. Escalation | Confidence < 70% or max retries hit | Root cause, confidence %, next steps |
+| 9. ML Healing Complete | Model retrained + promoted | Old vs new accuracy |
+| 10. ML Healing Failed | Retraining did not improve model | Why model was not promoted |
 
 ---
 
-## Full workflow (step by step)
+## Guardrails — 7 Safety Layers
+
+AEGIS is built to be **autonomous but safe**. Seven independent guardrails protect every action:
+
+| # | Guardrail | What it does | Where |
+|---|---|---|---|
+| 1 | **Confidence Gate** | If RCA confidence < 70%, AEGIS escalates instead of auto-fixing | `workflow.py`, `policy_engine.py` |
+| 2 | **Diff Review** | If LLM returns identical code (zero changes), it is flagged and logged | `guardrails/validators.py` |
+| 3 | **Rollback** | If post-fix run fails, original notebook is restored immediately | `agents/job_fixer.py` |
+| 4 | **Syntax + Lint Check** | Fixed code must pass `ast.parse()` + pyflakes before uploading | `guardrails/validators.py` |
+| 5 | **Rate Limiter** | Sliding-window cap: max 5 trigger runs per job per 10 minutes | `guardrails/rate_limiter.py` |
+| 6 | **Audit Log** | Every autonomous action written to an append-only JSONL file | `guardrails/audit_log.py` |
+| 7 | **Prompt Injection Guard** | Untrusted error logs and notebook code are truncated and scanned for injection patterns before LLM calls; every system message includes an injection-resistance instruction | `guardrails/prompt_guard.py` |
+
+---
+
+## Full Autonomous Workflow (15 nodes)
 
 ```
 You run AEGIS
     │
-    ├── Lists all Databricks jobs (real SDK call)
-    ├── You select: single job / multiple jobs / all
-    ├── You choose: monitor ML models? (y/n)
-    │
-    ▼
-STATUS CHECK (real Databricks API)
-    ├── Checks latest run for each selected job
-    ├── Checks MLflow models (if opted in)
-    ▼
-EMAIL #1 — Initial Health Check
-    (job status table + model health)
+    ├── [Node 0]  Job Selector — lists all Databricks jobs, you pick which to monitor
+    ├── [Node 1]  Status Check — real Databricks SDK health poll
+    ├── [Node 2]  Email #1 — Initial Health Check (job status + model health)
     │
     ├── All healthy → END
-    ├── ML drift detected → ML HEALER → END
+    ├── ML drift detected → [Node 3] ML Monitor → [Node 4] ML Healer → Email → END
     └── Job failure detected ↓
     │
     ▼
-RCA — Root Cause Analysis (GPT-5.5)
-    ├── Assembles context: real error logs + past incidents + pipeline activity
-    ├── GPT-5.5 reasons across all signals → root cause + confidence score
-    ├── Confidence < 70% → EMAIL (escalation) → END
+[Node 5] RCA (GPT-4o)
+    ├── Assembles: real error logs + past incidents (ChromaDB) + pipeline activity
+    ├── GPT-4o reasons across all signals → root cause + confidence score
+    ├── Confidence < 70% → Email (escalation) → END
     └── Confidence ≥ 70% ↓
     │
+[Node 6] Email #2 — Failure Alert
+[Node 7] Email #3 — Fix In Progress
+    │
     ▼
-EMAIL #2 — Failure Alert (RCA details)
-    ▼
-EMAIL #3 — Fix In Progress
-    ▼
-JOB FIXER — GPT-5.5 Notebook Repair
-    ├── Discovers Databricks environment (catalogs, tables)
-    ├── Fetches past similar incidents from ChromaDB
-    ├── Fetches real notebook source code from Databricks
-    ├── Sends: actual error + actual code + context → GPT-5.5
-    ├── GPT-5.5 identifies ALL bugs, returns fixed code
-    ├── Syntax check + lint + PEP8 format
-    ├── Uploads fixed notebook to Databricks
-    ├── Triggers re-run, polls until terminal state
+[Node 8] Job Fixer (GPT-5.5)
+    ├── Discovers Databricks environment (catalogs, schemas)
+    ├── Fetches similar past incidents from ChromaDB
+    ├── Fetches real notebook source from Databricks
+    ├── Deep scan + comprehensive fix (GPT-5.5 in one pass)
+    ├── Guardrails: Syntax ✓ → Lint ✓ → PEP8 ✓ → Diff ✓
+    ├── Uploads fixed notebook → triggers re-run → polls to terminal state
     ├── Re-run PASSED → continue
-    └── Re-run FAILED → extract new error → retry (max 3x) → rollback if exhausted
+    └── Re-run FAILED → extract new error → rollback → retry (max 3x) → escalate if exhausted
+    │
+[Node 9]  Email #4 — Fix Complete
+[Node 10] PR Manager — creates GitHub hotfix PR
+[Node 11] Email #5 — PR Raised (awaiting review)
+[Node 12] PR Wait — polls GitHub until merged
     │
     ▼
-EMAIL #4 — Fix Complete
-    ▼
-GITHUB PR — Created with fixed code
-    ▼
-EMAIL #5 — PR Raised (awaiting review)
-    ▼
-PR WAIT — Polls GitHub until merged or closed
+[Node 13] Deployment Agent — triggers GitHub Actions CD, polls status
     │
-    ├── Closed without merge → END
-    └── Merged ↓
-    │
-    ▼
-CD — GitHub Actions deploys Databricks bundle
-    ▼
-POST-DEPLOY CHECK — Re-runs health check on job
-    │
-    ├── Healthy → EMAIL #6 (Final Confirmation) → INCIDENT REPORT → END
-    └── Still failing → EMAIL #7 (Deployment Failed) → INCIDENT REPORT → END
+[Node 14] Post-Deploy Health Check
+    ├── Healthy → Email #6 (Final Confirmation) → Incident Report → END
+    └── Still failing → Email #7 (Deployment Failed) → Incident Report → END
 ```
+
+> **Architecture reference:** See [docs/architecture.md](docs/architecture.md) for full Mermaid diagrams covering the 15-node workflow, component map, sequence diagram, and guardrail decision tree.
 
 ---
 
-## ML Healing workflow (when drift detected)
+## ML Healing Workflow
 
 ```
 ML monitoring opted in → MLflow queried for Production models
     │
-    └── Degraded model found (accuracy drop > 5% or PSI > 0.20)
+    └── Degraded model found (accuracy drop > 5% OR PSI > 0.20)
          ▼
-    MLHealerAgent finds "[AEGIS ML] Model Retraining Pipeline" job in Databricks
+    MLHealerAgent finds "[AEGIS ML] Model Retraining Pipeline" in Databricks
          ▼
-    Triggers Databricks job run (passes model_name as parameter)
+    Triggers Databricks job (passes model_name as parameter)
          ▼
     Polls run until SUCCESS / FAILED
          │
-         ├── Run FAILED → EMAIL (ml_healing_failed) → done
-         └── Run SUCCESS ↓
+         ├── FAILED → Email (ml_healing_failed) → END
+         └── SUCCESS ↓
               ▼
          Fetches new model metrics from MLflow
               ▼
          Compares new accuracy vs old Production accuracy
               │
-              ├── Improved ≥ 0.5% → Promotes new version to Production → EMAIL (ml_healing_complete)
-              └── Not improved → Keeps old model → EMAIL (ml_healing_failed with reason)
+              ├── Improved ≥ 0.5% → Promotes to Production → Email (ml_healing_complete)
+              └── Not improved → Keeps old model → Email (ml_healing_failed with reason)
 ```
 
 ---
 
-## Project structure
+## Testing
+
+AEGIS ships with a complete test suite — **94 tests, 0 failures**:
+
+```bash
+python -m pytest tests/ -q
+```
+
+| Test file | What it covers |
+|---|---|
+| `test_policy_engine.py` | All 4 confidence/risk decision branches |
+| `test_validators.py` | Syntax check, lint, diff, autoformat, Databricks magic stripping |
+| `test_rate_limiter.py` | Sliding window, check/record, job isolation, window expiry |
+| `test_audit_log.py` | Append-only JSONL, UTC timestamps, `read_recent()` |
+| `test_prompt_guard.py` | 8 injection payload patterns, truncation, system message hardening |
+| `test_rca_agent.py` | Rule-based fallback, mocked LLM path, JSON parsing, injection resilience |
+| `test_heal_orchestrator.py` | All 7 failure types routed correctly in simulation mode |
+| `test_incident_store.py` | Store/retrieve cycle, ChromaDB fallback to in-memory |
+| `test_integration_smoke.py` | End-to-end simulation across all 5 failure types with assertions |
+
+Tests are also run automatically on every pull request via **GitHub Actions** (`ci.yml`).
+
+---
+
+## Project Structure
 
 ```
 aegis/
 ├── src/
-│   ├── workflow.py               # LangGraph 16-node state machine (main orchestrator)
+│   ├── workflow.py               # LangGraph 15-node multi-agent state machine
+│   ├── main.py                   # AEGISOrchestrator (simulation/demo loop)
+│   ├── models.py                 # Shared data models (dataclasses + enums)
 │   ├── agents/
-│   │   ├── status_checker.py     # Real Databricks SDK job health check
-│   │   ├── job_fixer.py          # GPT-5.5 notebook repair (fetch → fix → upload → verify)
+│   │   ├── status_checker.py     # Databricks SDK job health polling
+│   │   ├── job_fixer.py          # GPT-5.5 notebook repair (5-phase autonomous)
 │   │   ├── ml_healer.py          # Autonomous ML retraining + model promotion
-│   │   ├── model_monitor.py      # MLflow model drift detection
-│   │   ├── mail_sender.py        # 8-stage email notifications (Gmail SMTP)
-│   │   ├── pr_manager.py         # GitHub PR creation and polling
-│   │   └── deployment.py         # CD trigger via GitHub Actions
+│   │   ├── model_monitor.py      # MLflow accuracy + PSI drift detection
+│   │   ├── mail_sender.py        # 10-stage Gmail SMTP notifications
+│   │   ├── pr_manager.py         # GitHub PR creation and merge polling
+│   │   └── deployment.py         # GitHub Actions CD trigger + monitoring
 │   ├── diagnosis/
-│   │   ├── rca_agent.py          # GPT-5.5 root cause analysis
-│   │   └── context_assembler.py  # Assembles real error logs + pipeline activity
-│   ├── knowledge/
-│   │   └── incident_store.py     # ChromaDB vector store of past incidents
+│   │   ├── rca_agent.py          # GPT-4o root cause analysis (JSON output)
+│   │   └── context_assembler.py  # Multi-signal context builder
+│   ├── detection/
+│   │   └── failure_detector.py   # Simulation + production failure detector
+│   ├── healing/
+│   │   ├── heal_orchestrator.py  # Failure-type → action routing
+│   │   └── policy_engine.py      # Confidence + risk governance gate
 │   ├── guardrails/
-│   │   ├── audit_log.py          # Full audit trail of every action
-│   │   ├── rate_limiter.py       # Prevents runaway fix loops
-│   │   └── validators.py         # Syntax check, lint, PEP8 format
-│   ├── reporting/
-│   │   └── incident_report.py    # Structured JSON incident report generator
-│   └── models.py                 # Shared data models (AEGISState, RCAResult, etc.)
-├── de_project/
-│   ├── databricks.yml            # Databricks Asset Bundle config
+│   │   ├── prompt_guard.py       # Prompt injection defence (Guardrail #7)
+│   │   ├── validators.py         # Syntax / lint / diff / PEP8 (Guardrails #2, #4)
+│   │   ├── rate_limiter.py       # Sliding-window trigger throttle (Guardrail #5)
+│   │   └── audit_log.py          # Append-only action log (Guardrail #6)
+│   ├── knowledge/
+│   │   └── incident_store.py     # ChromaDB vector store for past incidents
+│   └── reporting/
+│       ├── incident_report.py    # Structured incident report generator
+│       ├── gmail_notifier.py     # HTML email builder
+│       ├── pr_creator.py         # GitHub PR body builder
+│       └── teams_notifier.py     # Teams webhook sender
+├── de_project/                   # Databricks Asset Bundle (DAB)
+│   ├── databricks.yml
 │   ├── notebooks/
 │   │   ├── failing_notebook.py   # Intentionally broken notebook (AEGIS test target)
+│   │   ├── 01_ingest.py          # Sample ingest notebook
+│   │   ├── 02_transform.py       # Sample transform notebook
 │   │   └── ml_model_train.py     # ML retraining notebook (GradientBoosting + MLflow)
 │   └── resources/jobs/
+│       ├── data_pipeline.yml     # Databricks job for full pipeline
 │       ├── failing_job.yml       # Databricks job for failing_notebook
-│       └── ml_job.yml            # Databricks job for ml_model_train
+│       └── ml_job.yml            # Databricks job for ML retraining
+├── tests/                        # Complete test suite (94 tests)
+│   ├── conftest.py
+│   ├── test_policy_engine.py
+│   ├── test_validators.py
+│   ├── test_rate_limiter.py
+│   ├── test_audit_log.py
+│   ├── test_prompt_guard.py
+│   ├── test_rca_agent.py
+│   ├── test_heal_orchestrator.py
+│   ├── test_incident_store.py
+│   └── test_integration_smoke.py
+├── docs/
+│   └── architecture.md           # Mermaid diagrams: workflow, components, sequence, guardrails
 ├── demo/
-│   └── production_multi_agent.py # Main entry point
+│   ├── production_multi_agent.py # Full production entry point
+│   ├── production_run.py         # Single-run demo
+│   └── quick_test.py             # 5-failure-type smoke test
 ├── config/
-│   └── config.yaml               # Thresholds, job-to-git path mapping, MLflow URI
+│   └── config.yaml               # Thresholds, drift config, notebook-to-git path mapping
 ├── .github/workflows/
-│   ├── ci.yml                    # Lint + bundle validate on PRs (skips failing_notebook)
-│   └── cd.yml                    # Deploy to Databricks on merge (destroy requires DESTROY input)
-└── .env                          # Credentials (never committed)
+│   ├── ci.yml                    # Tests + lint + DAB validate on PRs
+│   └── cd.yml                    # Deploy to Databricks on merge to master
+├── .env.example                  # Environment variable template
+├── docker-compose.yml
+└── requirements.txt
 ```
 
 ---
@@ -228,79 +273,115 @@ aegis/
 
 ### Prerequisites
 
-- Python 3.11
+- Python 3.11+
 - Databricks workspace with SDK access
-- EPAM DIAL API key (for GPT-5.5)
+- EPAM DIAL API key (for GPT-4o / GPT-5.5)
 - Gmail account with App Password enabled
 - GitHub repo with Actions enabled
 
-### Environment variables (.env)
+### 1. Clone and install
 
 ```bash
-# Databricks
-DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-DATABRICKS_TOKEN=your-token
+git clone https://github.com/your-org/aegis.git
+cd aegis
+pip install -r requirements.txt
+```
 
-# EPAM DIAL / GPT-5.5
+### 2. Configure environment variables
+
+Copy `.env.example` to `.env` and fill in your values:
+
+```bash
+# EPAM DIAL API (Azure OpenAI-compatible proxy)
 DIAL_API_KEY=your-dial-api-key
 DIAL_API_ENDPOINT=https://ai-proxy.lab.epam.com
-DIAL_DEPLOYMENT=gpt-5.5-2026-04-24
+DIAL_DEPLOYMENT=gpt-4o
 DIAL_API_VERSION=2025-04-01-preview
 
-# Gmail
+# Databricks
+DATABRICKS_HOST=https://your-workspace.azuredatabricks.net
+DATABRICKS_TOKEN=your-databricks-token
+
+# Your Databricks user email — resolves notebook paths in config.yaml
+DATABRICKS_USER_EMAIL=you@company.com
+
+# Gmail notifications
 GMAIL_SENDER=your@gmail.com
-GMAIL_APP_PASSWORD=your-app-password
+GMAIL_APP_PASSWORD=your-16-char-app-password
 GMAIL_RECIPIENTS=oncall@company.com,team@company.com
 
-# GitHub
+# GitHub PR creation
 GITHUB_TOKEN=your-github-pat
 GITHUB_REPO_OWNER=your-org
 GITHUB_REPO_NAME=your-repo
 
 # MLflow (optional — AEGIS simulates if not set)
 MLFLOW_TRACKING_URI=https://your-mlflow-server
+
+# AEGIS mode
+SIMULATION_MODE=false   # true = use simulated data (demo), false = real Databricks
 ```
 
-### Install and run
+> **Note on `DATABRICKS_USER_EMAIL`:** `config.yaml` uses `${DATABRICKS_USER_EMAIL}` placeholders for notebook path mapping. Setting this env var is all that is needed — no personal email in committed files.
 
-```bash
-pip install -r requirements.txt
-python demo/production_multi_agent.py
-```
-
-### Deploy the Databricks test jobs
+### 3. Deploy the Databricks test jobs
 
 ```bash
 cd de_project
 databricks bundle deploy --target dev
 ```
 
-This creates two jobs in your workspace:
-- `[AEGIS Test] Data Quality Validation - Failing` — used to demo autonomous job fixing
-- `[AEGIS ML] Model Retraining Pipeline` — used for autonomous ML retraining
+This creates two jobs in your Databricks workspace:
+- **`[AEGIS Test] Failing Data Pipeline`** — intentionally broken notebook AEGIS will fix autonomously
+- **`[AEGIS ML] Model Retraining Pipeline`** — triggered automatically if ML drift is detected
+
+### 4. Run AEGIS
+
+```bash
+python demo/production_multi_agent.py
+```
+
+AEGIS will:
+1. List all jobs in your workspace
+2. Let you choose which job(s) to monitor
+3. Ask if you want ML model monitoring
+4. Run the full autonomous healing loop
+
+### 5. Run tests
+
+```bash
+python -m pytest tests/ -q
+```
 
 ---
 
-## AI tools used
+## AI Tools Used
 
 | Tool | Where used | Purpose |
-|------|-----------|---------|
-| **GPT-5.5** (via EPAM DIAL API) | `src/agents/job_fixer.py`, `src/diagnosis/rca_agent.py` | Root cause analysis + autonomous notebook repair |
-| **LangChain** (`AzureChatOpenAI`) | `src/agents/job_fixer.py`, `src/diagnosis/rca_agent.py` | LLM integration layer for GPT-5.5 calls |
-| **LangGraph** | `src/workflow.py` | 16-node multi-agent state machine orchestrating the entire healing lifecycle |
-| **MLflow** | `src/agents/model_monitor.py`, `src/agents/ml_healer.py`, `de_project/notebooks/ml_model_train.py` | Model registry, drift metrics (accuracy + PSI), model version promotion |
-| **ChromaDB** | `src/knowledge/incident_store.py` | Vector store — persists resolved incidents, retrieves similar past cases to feed GPT-5.5 as context |
-| **Databricks SDK** (`databricks.sdk`) | `src/agents/status_checker.py`, `src/agents/job_fixer.py`, `src/agents/ml_healer.py` | Real job monitoring, notebook fetch/upload, run triggering |
+|---|---|---|
+| **GPT-4o** (via EPAM DIAL) | `src/diagnosis/rca_agent.py` | Root cause analysis — structured JSON output with confidence score |
+| **GPT-5.5** (via EPAM DIAL) | `src/agents/job_fixer.py` | Deep notebook scan + comprehensive bug fix in one pass |
+| **LangChain** (`AzureChatOpenAI`) | `rca_agent.py`, `job_fixer.py` | LLM integration layer |
+| **LangGraph** | `src/workflow.py` | 15-node async multi-agent state machine orchestrating the healing lifecycle |
+| **MLflow** | `model_monitor.py`, `ml_healer.py`, `ml_model_train.py` | Model registry, drift metrics, version promotion |
+| **ChromaDB** | `src/knowledge/incident_store.py` | Vector store — persists resolved incidents; similar past cases fed to GPT-5.5 as context |
+| **Databricks SDK** | `status_checker.py`, `job_fixer.py`, `ml_healer.py` | Job monitoring, notebook fetch/upload, run triggering |
+| **PyGithub** | `src/agents/pr_manager.py`, `deployment.py` | PR creation, merge polling, CD workflow triggering |
 | **scikit-learn** | `de_project/notebooks/ml_model_train.py` | GradientBoosting model training in the retraining pipeline |
-| **PyGithub** | `src/agents/pr_manager.py` | GitHub PR creation and merge polling |
 
 ---
 
-## What makes this different
+## What Makes This Different
 
-- **No simulation mode** — every action hits real Databricks APIs
-- **Error-driven fixing** — GPT-5.5 reads the actual error from the actual failed run, not predefined patterns
-- **End-to-end autonomous** — detect → diagnose → fix → verify → PR → deploy → report, without human intervention (except PR review)
-- **ML + Jobs** — monitors both Databricks jobs and MLflow models in one unified loop
-- **Safe by design** — rollback, rate limiting, confidence gate, syntax validation all built in
-- **Memory** — ChromaDB stores every resolved incident; future fixes are informed by past fixes
+| Capability | AEGIS | Typical on-call alert tool |
+|---|---|---|
+| Root cause analysis | GPT-4o reads the real error log | Pattern matching on known errors |
+| Code repair | GPT-5.5 fetches and fixes the actual notebook | Manual fix required |
+| Verification | Uploads fix and re-runs the job | No automated verification |
+| Retry loop | Up to 3 retries with the new error each time | Single attempt |
+| Rollback | Automatic if post-fix run fails | Manual rollback |
+| ML monitoring | PSI + accuracy drift detection | Job alerts only |
+| Deployment | Auto-creates PR → CD on merge | Manual deployment |
+| Memory | ChromaDB stores every resolved incident; future fixes are informed by past fixes | No institutional memory |
+| Safety | 7 independent guardrails including prompt injection defence | None |
+| Audit trail | Every action in append-only JSONL | Alert logs only |

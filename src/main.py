@@ -29,7 +29,11 @@ console = Console()
 
 def load_config(path: str = "config/config.yaml") -> dict:
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        raw = f.read()
+    # Expand ${VAR} placeholders with values from environment so no PII
+    # needs to be committed to config.yaml (e.g. DATABRICKS_USER_EMAIL).
+    raw = os.path.expandvars(raw)
+    return yaml.safe_load(raw)
 
 
 class AEGISOrchestrator:

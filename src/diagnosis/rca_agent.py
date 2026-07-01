@@ -10,6 +10,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.models import RCAResult, FailureType, RiskLevel
 from src.diagnosis.context_assembler import IncidentContext
+from src.guardrails.prompt_guard import (
+    sanitize_error_log,
+    sanitize_for_prompt,
+    injection_resistant_system_message,
+    MAX_ERROR_LOG_CHARS,
+)
 
 
 SYSTEM_PROMPT = """You are AEGIS, a senior AI Site Reliability Engineer specializing in 
@@ -130,22 +136,28 @@ class RCAAgent:
     async def _llm_diagnose(self, context: IncidentContext) -> RCAResult:
         import json
 
+        # Guardrail #7 — sanitise all untrusted fields before prompt interpolation
+        safe_error_summary = sanitize_for_prompt(context.error_summary, max_chars=1_000, field_name="error_summary")
+        safe_error_logs = sanitize_error_log(context.error_logs)
+        safe_schema_changes = sanitize_for_prompt(context.recent_schema_changes, max_chars=500, field_name="schema_changes")
+        safe_similar = [sanitize_for_prompt(s, max_chars=300, field_name="similar_incident") for s in context.similar_incidents]
+
         prompt = RCA_PROMPT_TEMPLATE.format(
             incident_id=context.incident_id,
             job_name=context.job_name,
             failure_type=context.failure_type,
             timestamp=context.timestamp,
-            error_summary=context.error_summary,
-            error_logs=context.error_logs,
+            error_summary=safe_error_summary,
+            error_logs=safe_error_logs,
             upstream_jobs=", ".join(context.upstream_jobs) or "none",
             affected_tables=", ".join(context.affected_tables) or "none",
             metrics=str(context.metrics),
-            recent_schema_changes=context.recent_schema_changes,
-            similar_incidents="\n".join(context.similar_incidents) or "none found",
+            recent_schema_changes=safe_schema_changes,
+            similar_incidents="\n".join(safe_similar) or "none found",
         )
 
         messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=injection_resistant_system_message(SYSTEM_PROMPT)),
             HumanMessage(content=prompt),
         ]
 

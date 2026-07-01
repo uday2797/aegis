@@ -134,20 +134,8 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
                     run = runs[0]
                     if run.state and run.state.result_state:
                         latest_status = run.state.result_state.value
-            except:
-                pass
-            
-            all_jobs.append({
-                "job_id": job.job_id,
-                "name": job.settings.name if job.settings else "Unnamed",
-                "latest_status": latest_status,
-                "tasks": len(job.settings.tasks) if (job.settings and job.settings.tasks) else 0,
-            })
-        
-        state["available_jobs"] = all_jobs
-        
-        # Display jobs in table
-        print("\n" + "=" * 100)
+            except Exception as e:
+                logger.warning(f"[JobSelector] Could not fetch run status for job {job.job_id}: {e}")
         print("🛡️  AEGIS - Autonomous Excellence Guardian & Intelligent System")
         print("=" * 100)
         print(f"\n📋 Found {len(all_jobs)} Databricks jobs:\n")

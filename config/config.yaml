@@ -54,12 +54,13 @@ reporting:
 # Maps Databricks workspace notebook paths → git repo paths for PR commits
 # Update these paths to match your Databricks workspace layout.
 # Find paths in Databricks UI: Workspace → right-click notebook → Copy Path
+# Set DATABRICKS_USER_EMAIL in your .env file (e.g. you@company.com)
 databricks_to_git_path:
-  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/failing_notebook": "de_project/notebooks/failing_notebook.py"
-  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/01_ingest": "de_project/notebooks/01_ingest.py"
-  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/02_transform": "de_project/notebooks/02_transform.py"
-  "/Users/udays2797@gmail.com/Failing Test Notebook": "de_project/notebooks/failing_notebook.py"
-  "/Workspace/Users/udays2797@gmail.com/.bundle/aegis-de-project/dev/files/notebooks/ml_model_train": "de_project/notebooks/ml_model_train.py"
+  "/Workspace/Users/${DATABRICKS_USER_EMAIL}/.bundle/aegis-de-project/dev/files/notebooks/failing_notebook": "de_project/notebooks/failing_notebook.py"
+  "/Workspace/Users/${DATABRICKS_USER_EMAIL}/.bundle/aegis-de-project/dev/files/notebooks/01_ingest": "de_project/notebooks/01_ingest.py"
+  "/Workspace/Users/${DATABRICKS_USER_EMAIL}/.bundle/aegis-de-project/dev/files/notebooks/02_transform": "de_project/notebooks/02_transform.py"
+  "/Users/${DATABRICKS_USER_EMAIL}/Failing Test Notebook": "de_project/notebooks/failing_notebook.py"
+  "/Workspace/Users/${DATABRICKS_USER_EMAIL}/.bundle/aegis-de-project/dev/files/notebooks/ml_model_train": "de_project/notebooks/ml_model_train.py"
 
 knowledge_store:
   persist_dir: "./data/knowledge_store"

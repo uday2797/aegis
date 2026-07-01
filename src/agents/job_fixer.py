@@ -14,6 +14,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.guardrails.audit_log import AuditLog
 from src.guardrails.rate_limiter import RateLimiter
+from src.guardrails.prompt_guard import (
+    sanitize_error_log,
+    sanitize_notebook_code,
+    sanitize_for_prompt,
+    injection_resistant_system_message,
+)
 from src.guardrails.validators import (
     validate_python_code,
     lint_python_code,
@@ -449,6 +455,10 @@ class JobFixerAgent:
         2. Then generates one comprehensive fix for everything
         """
         
+        # ─── Guardrail #7: Sanitise untrusted inputs before prompt interpolation ───
+        safe_error = sanitize_error_log(error_summary)
+        safe_code = sanitize_notebook_code(notebook_content)
+
         # Build Databricks context string
         context_str = "**Databricks Environment:**\n"
         if databricks_context.get("context_available"):
@@ -483,10 +493,10 @@ class JobFixerAgent:
             f"{context_str}\n"
             f"{past_ref_str}\n"
             f"## Current Error (What Triggered This Scan)\n"
-            f"```\n{error_summary[:3000]}\n```\n\n"
+            f"```\n{safe_error}\n```\n\n"
             f"## Full Notebook Source Code\n"
             f"**Path:** `{notebook_path}`\n"
-            f"```python\n{notebook_content}\n```\n\n"
+            f"```python\n{safe_code}\n```\n\n"
             f"## AUTONOMOUS WORKFLOW\n\n"
             f"### STEP 1: DEEP SCAN (Understand Everything)\n"
             f"Read through the ENTIRE notebook carefully. Understand:\n"
@@ -535,18 +545,19 @@ class JobFixerAgent:
             f"⚠️ CRITICAL: Fix EVERY bug in ONE pass. Code must be PEP8-compliant and production-ready."
         )
         
+        _base_system = (
+            "You are AEGIS, an elite autonomous AI reliability engineer and senior Python developer. "
+            "You specialize in deep code analysis, comprehensive bug fixing, and writing clean, production-grade code. "
+            "You NEVER do partial fixes. You scan thoroughly, identify ALL issues, then fix everything at once. "
+            "You are an expert in PySpark, Databricks, Python, and data engineering. "
+            "You ALWAYS write PEP8-compliant code: proper indentation, descriptive names, type hints, specific exception handling. "
+            "You think systematically: understand → scan → reference past bugs → list → fix → clean."
+        )
         messages = [
-            SystemMessage(content=(
-                "You are AEGIS, an elite autonomous AI reliability engineer and senior Python developer. "
-                "You specialize in deep code analysis, comprehensive bug fixing, and writing clean, production-grade code. "
-                "You NEVER do partial fixes. You scan thoroughly, identify ALL issues, then fix everything at once. "
-                "You are an expert in PySpark, Databricks, Python, and data engineering. "
-                "You ALWAYS write PEP8-compliant code: proper indentation, descriptive names, type hints, specific exception handling. "
-                "You think systematically: understand → scan → reference past bugs → list → fix → clean."
-            )),
+            SystemMessage(content=injection_resistant_system_message(_base_system)),
             HumanMessage(content=prompt),
         ]
-        
+
         logger.info(f"[JobFixer] 🧠 Invoking GPT-5.5 for deep scan + comprehensive fix...")
         try:
             response = await asyncio.wait_for(self.llm.ainvoke(messages), timeout=300)
