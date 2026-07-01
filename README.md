@@ -171,7 +171,7 @@ ML monitoring opted in → MLflow queried for Production models
 
 ## Testing
 
-AEGIS ships with a complete test suite — **94 tests, 0 failures**:
+AEGIS ships with a complete test suite — **103 tests, 0 failures**:
 
 ```bash
 python -m pytest tests/ -q
@@ -187,7 +187,7 @@ python -m pytest tests/ -q
 | `test_rca_agent.py` | Rule-based fallback, mocked LLM path, JSON parsing, injection resilience |
 | `test_heal_orchestrator.py` | All 7 failure types routed correctly in simulation mode |
 | `test_incident_store.py` | Store/retrieve cycle, ChromaDB fallback to in-memory |
-| `test_integration_smoke.py` | End-to-end simulation across all 5 failure types with assertions |
+| `test_integration_smoke.py` | End-to-end simulation: all 5 failure types (DE + ML) through full pipeline with field-level assertions |
 
 Tests are also run automatically on every pull request via **GitHub Actions** (`ci.yml`).
 
@@ -240,7 +240,7 @@ aegis/
 │       ├── data_pipeline.yml     # Databricks job for full pipeline
 │       ├── failing_job.yml       # Databricks job for failing_notebook
 │       └── ml_job.yml            # Databricks job for ML retraining
-├── tests/                        # Complete test suite (94 tests)
+├── tests/                        # Complete test suite (103 tests)
 │   ├── conftest.py
 │   ├── test_policy_engine.py
 │   ├── test_validators.py
