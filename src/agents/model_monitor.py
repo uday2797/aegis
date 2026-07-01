@@ -138,16 +138,17 @@ class ModelMonitorAgent:
         seed = int(datetime.now(tz=timezone.utc).timestamp()) // 120  # changes every 2 min
         rng = random.Random(seed)
 
+        force_drift = os.environ.get("AEGIS_FORCE_ML_DRIFT", "").lower() in ("1", "true", "yes")
         models = [
             {
                 "name": "sales_forecast_v3",
                 "baseline": 0.924,
-                "inject_degradation": rng.random() < 0.35,  # 35% chance degraded
+                "inject_degradation": force_drift or rng.random() < 0.35,
             },
             {
                 "name": "churn_classifier_v2",
                 "baseline": 0.881,
-                "inject_degradation": False,
+                "inject_degradation": False,  # always healthy — shows contrast
             },
         ]
 
