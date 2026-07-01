@@ -193,7 +193,6 @@ class MLHealerAgent:
         """Trigger a Databricks job run with model_name as parameter."""
         try:
             from databricks.sdk import WorkspaceClient
-            from databricks.sdk.service.jobs import RunParameters
             client = WorkspaceClient(host=self.workspace_host, token=self.workspace_token)
 
             run = await asyncio.to_thread(
@@ -217,8 +216,9 @@ class MLHealerAgent:
 
             terminal_states = {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}
             poll_count = 0
+            MAX_POLLS = 240  # 240 × 30s = 2 hours max
 
-            while True:
+            while poll_count < MAX_POLLS:
                 run = await asyncio.to_thread(lambda: client.jobs.get_run(run_id=run_id))
                 state = run.state
                 lc_state = state.life_cycle_state.value if state.life_cycle_state else "UNKNOWN"
@@ -233,6 +233,9 @@ class MLHealerAgent:
                     return result_state  # "SUCCESS" | "FAILED" | "CANCELED" | "TIMEDOUT"
 
                 await asyncio.sleep(30)
+
+            logger.error(f"[MLHealer] Run {run_id} timed out after {MAX_POLLS * 30 // 60} minutes")
+            return "TIMEDOUT"
 
         except Exception as e:
             logger.error(f"[MLHealer] Error polling run {run_id}: {e}")
@@ -294,9 +297,10 @@ class MLHealerAgent:
                 lambda: client.get_latest_versions(model_name, stages=["Production"])
             )
             for v in prod_versions:
+                ver = v.version  # capture loop variable by value to avoid late-binding closure
                 await asyncio.to_thread(
-                    lambda: client.transition_model_version_stage(
-                        name=model_name, version=v.version, stage="Archived"
+                    lambda ver=ver: client.transition_model_version_stage(
+                        name=model_name, version=ver, stage="Archived"
                     )
                 )
 

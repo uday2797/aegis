@@ -29,13 +29,17 @@ def generate_incident_report(state: dict) -> dict:
 
     # ── Build timeline from emails_sent + key stages ────────────────────
     stage_labels = {
-        "initial_health_check": "Initial health check email sent",
-        "failure_alert":        "Failure detected — RCA complete",
-        "fix_in_progress":      "Autonomous fix started",
-        "fix_complete":         "Fix verified — job running successfully",
-        "pr_raised":            "GitHub PR created",
-        "final_confirmation":   "Full cycle complete — job healthy in production",
-        "deployment_failed":    "Post-deployment check failed — escalated to human",
+        "initial_health_check":  "Initial health check email sent",
+        "failure_alert":         "Failure detected — RCA complete",
+        "fix_in_progress":       "Autonomous fix started",
+        "fix_complete":          "Fix verified — job running successfully",
+        "pr_raised":             "GitHub PR created",
+        "final_confirmation":    "Full cycle complete — job healthy in production",
+        "deployment_failed":     "Post-deployment check failed — escalated to human",
+        "escalation":            "Low RCA confidence — escalated to human operator",
+        "ml_drift_alert":        "ML drift detected — auto-retraining started",
+        "ml_healing_complete":   "ML model retrained and promoted to Production",
+        "ml_healing_failed":     "ML retraining insufficient — escalated to human",
     }
     timeline = [
         {"step": i + 1, "event": stage_labels.get(stage, stage)}
@@ -89,6 +93,10 @@ def generate_incident_report(state: dict) -> dict:
                 r.get("status") == "degraded"
                 for r in (state.get("model_health_reports") or [])
             ),
+        },
+        "ml_healing": {
+            "degraded_models": state.get("ml_degraded_models", []),
+            "heal_result": state.get("ml_heal_result"),
         },
         "notifications": {
             "emails_sent": state.get("emails_sent", []),

@@ -66,6 +66,18 @@ class RateLimiter:
         logger.debug(f"[RateLimiter] Recorded trigger for job {job_id}")
 
     @staticmethod
+    def check_and_record(
+        job_id: int | str,
+        max_runs: int = DEFAULT_MAX_RUNS,
+        window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    ) -> tuple[bool, str]:
+        """Atomically check and record a trigger. Prefer this over separate check()+record_trigger() calls."""
+        allowed, reason = RateLimiter.check(job_id, max_runs, window_seconds)
+        if allowed:
+            RateLimiter.record_trigger(job_id)
+        return allowed, reason
+
+    @staticmethod
     def remaining(job_id: int | str, max_runs: int = DEFAULT_MAX_RUNS, window_seconds: int = DEFAULT_WINDOW_SECONDS) -> int:
         """How many more triggers are allowed in the current window."""
         key = str(job_id)

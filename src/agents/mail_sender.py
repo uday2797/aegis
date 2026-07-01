@@ -562,13 +562,10 @@ class MailSenderAgent:
             except smtplib.SMTPAuthenticationError:
                 logger.error("[MailSender] SMTP auth failed")
                 raise
-            except (smtplib.SMTPException, OSError) as e:
+            except Exception as e:
                 logger.warning(f"[MailSender] SMTP attempt {attempt}/2 failed: {e}")
                 if attempt < 2:
                     time.sleep(3)
-            except Exception as e:
-                logger.error(f"[MailSender] SMTP unexpected error: {e}")
-                raise
         raise Exception("All SMTP attempts failed")
 
     def _build_html(self, title: str, body: str, color: str) -> str:

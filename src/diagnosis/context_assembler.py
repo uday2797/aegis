@@ -86,9 +86,12 @@ class ContextAssembler:
             # List recent runs across all jobs (last 20 runs)
             for run in client.jobs.list_runs(limit=20):
                 run_count += 1
-                start_ts = run.start_time  # milliseconds epoch
+                start_ts = run.start_time
                 if start_ts:
-                    run_dt = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
+                    if isinstance(start_ts, datetime):
+                        run_dt = start_ts if start_ts.tzinfo else start_ts.replace(tzinfo=timezone.utc)
+                    else:
+                        run_dt = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
                     if run_dt < cutoff:
                         continue
                     age_minutes = int((datetime.now(tz=timezone.utc) - run_dt).total_seconds() / 60)

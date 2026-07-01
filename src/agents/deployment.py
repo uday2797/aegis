@@ -25,9 +25,13 @@ class DeploymentAgent:
             self.enabled = False
         else:
             self.github = Github(self.token)
-            self.repo = self.github.get_repo(f"{self.repo_owner}/{self.repo_name}")
-            self.enabled = True
-            logger.info(f"[Deployment] Initialized | repo={self.repo_owner}/{self.repo_name}")
+            try:
+                self.repo = self.github.get_repo(f"{self.repo_owner}/{self.repo_name}")
+                self.enabled = True
+                logger.info(f"[Deployment] Initialized | repo={self.repo_owner}/{self.repo_name}")
+            except GithubException as e:
+                logger.error(f"[Deployment] Cannot access repo {self.repo_owner}/{self.repo_name}: {e}")
+                self.enabled = False
 
     async def trigger_cd(self, merge_sha: str) -> Dict:
         """

@@ -443,6 +443,7 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     mail_agent = MailSenderAgent()
     await mail_agent.send_stage("failure_alert", {
         "incident_id": state["current_incident_id"],
+        "job_id": state["current_job_id"],
         "job_name": state["current_job_name"],
         "error_summary": state["current_error_summary"],
         "root_cause": state["root_cause"],
@@ -688,6 +689,14 @@ async def ml_healer_node(state: AEGISState) -> AEGISState:
         return state
 
     logger.warning(f"[Workflow] {len(degraded)} degraded model(s) — starting ML healing")
+
+    _mail = MailSenderAgent()
+    await _mail.send_stage("ml_drift_alert", {
+        "incident_id": state.get("current_incident_id", "ML-DRIFT"),
+        "degraded_models": degraded,
+    })
+    state["emails_sent"].append("ml_drift_alert")
+
     healer = MLHealerAgent(state["config"])
     result = await healer.heal(degraded)
 

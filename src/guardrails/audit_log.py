@@ -53,4 +53,10 @@ class AuditLog:
         if not AUDIT_LOG_PATH.exists():
             return []
         lines = AUDIT_LOG_PATH.read_text(encoding="utf-8").strip().splitlines()
-        return [json.loads(l) for l in lines[-n:]]
+        entries = []
+        for line in lines[-n:]:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                logger.warning(f"[AuditLog] Skipping malformed entry: {line[:80]}")
+        return entries
