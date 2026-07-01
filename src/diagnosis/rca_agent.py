@@ -102,7 +102,7 @@ class RCAAgent:
         # EPAM DIAL API — Azure OpenAI-compatible proxy
         api_key = os.environ.get("DIAL_API_KEY")
         endpoint = os.environ.get("DIAL_API_ENDPOINT", "https://ai-proxy.lab.epam.com")
-        deployment = os.environ.get("DIAL_DEPLOYMENT", "gpt-5.5-2026-04-24")
+        deployment = os.environ.get("DIAL_RCA_DEPLOYMENT", "gpt-4o")
         api_version = os.environ.get("DIAL_API_VERSION", "2025-04-01-preview")
 
         if not api_key:
@@ -114,9 +114,9 @@ class RCAAgent:
             api_key=api_key,
             azure_deployment=deployment,
             api_version=api_version,
-            temperature=1,      # reasoning models require temperature=1
-            max_tokens=8000,    # reasoning model: needs budget for chain-of-thought + JSON output
-            request_timeout=120,
+            temperature=0,       # gpt-4o: standard model, temperature=0 for deterministic JSON
+            max_tokens=2000,     # RCA only needs a small JSON response
+            request_timeout=60,
         )
 
     async def diagnose(self, context: IncidentContext) -> RCAResult:
