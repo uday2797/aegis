@@ -5,7 +5,7 @@ LLM-powered notebook repair: fetch → fix → upload → verify.
 import os
 import asyncio
 import base64
-from typing import Dict, List
+from typing import Dict
 from loguru import logger
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.workspace import ImportFormat, Language
@@ -17,26 +17,24 @@ from src.guardrails.rate_limiter import RateLimiter
 from src.guardrails.prompt_guard import (
     sanitize_error_log,
     sanitize_notebook_code,
-    sanitize_for_prompt,
     injection_resistant_system_message,
 )
 from src.guardrails.validators import (
     validate_python_code,
     lint_python_code,
-    autoformat_code,
     compute_diff,
 )
 
 
 class JobFixerAgent:
     """
-    Autonomous notebook repair using GPT-4o.
-    
+    Autonomous notebook repair using GPT-5.5.
+
     Flow:
     1. Fetch notebook source from Databricks
-    2. Call GPT-4o with error + code → get fixed code
-    3. Upload fixed notebook to Databricks
-    4. Trigger job run and monitor to completion
+    2. Call GPT-5.5 with error + code → surgical targeted fix
+    3. Validate syntax, log diff, upload fixed notebook
+    4. Trigger job run and monitor; rollback + retry on failure (max 3 attempts)
     """
 
     def __init__(self, host: str, token: str, config: dict):
@@ -69,11 +67,11 @@ class JobFixerAgent:
         Fix a failed job by repairing its notebooks with GPT-5.5.
         
         **AUTONOMOUS WORKFLOW:**
-        1. Scan Databricks environment (tables, schemas, columns)
-        2. Deep scan entire notebook (identify ALL bugs)
-        3. Generate comprehensive fix (all bugs in one pass)
-        4. Upload fixed notebook
-        5. Verify with test run
+        1. Discover Databricks environment context
+        2. Fetch past similar incidents as reference
+        3. Call GPT-5.5 with full error trace → targeted fix (minimum change)
+        4. Validate syntax + lint, log diff, upload fixed notebook
+        5. Re-run job and verify; rollback + retry with new error on failure
         
         Returns:
             {
@@ -149,14 +147,12 @@ class JobFixerAgent:
             originals: Dict[str, str] = {nb["path"]: nb["content"] for nb in notebooks}
             
             # ═══════════════════════════════════════════════════════════════
-            # PHASE 3: DEEP SCAN & COMPREHENSIVE FIX (ALL BUGS IN ONE PASS)
+            # PHASE 3: TARGETED ERROR FIX (GPT-5.5 — minimal surgical change)
             # ═══════════════════════════════════════════════════════════════
-            logger.info(f"[JobFixer] 🧠 Phase 3: Deep scan + comprehensive fix (GPT-5.5)...")
+            logger.info(f"[JobFixer] 🔧 Phase 3: Targeted error fix (GPT-5.5)...")
             fixed_notebooks = []
             for nb in notebooks:
-                logger.info(f"[JobFixer] 🔬 Scanning: {nb['path']}")
-                
-                # Use enhanced prompt with Databricks context + past incidents
+                logger.info(f"[JobFixer] 🔬 Fixing: {nb['path']}")
                 fixed_content = await self._comprehensive_scan_and_fix(
                     notebook_content=nb["content"],
                     error_summary=error_summary,
@@ -195,15 +191,6 @@ class JobFixerAgent:
                 )
                 if not lint_passed:
                     logger.warning(f"[JobFixer] ⚠️  Lint issues found (non-blocking): {lint_issues[:3]}")
-
-                # ─── PEP8 Auto-Format ───────────────────────────────
-                fixed_content = autoformat_code(fixed_content)
-                AuditLog.record(
-                    "PEP8_FORMATTED",
-                    incident_id=incident_id,
-                    job_id=job_id,
-                    notebook_path=nb['path'],
-                )
 
                 # ─── GUARDRAIL #2: Notebook Diff Review ──────────────────
                 diff_text = compute_diff(nb["content"], fixed_content, nb['path'])
@@ -313,35 +300,18 @@ class JobFixerAgent:
 
                         # Post-fix run FAILED - should we retry?
                         if retry_attempt < max_retries:
-                            logger.warning(f"[JobFixer] Post-fix run {run_id} still failed (attempt {retry_attempt}/{max_retries}). Extracting new error and retrying...")
-                            
-                            # Extract NEW error from the latest failed run
-                            await asyncio.sleep(2)  # Brief pause
-                            new_run = self.client.jobs.get_run(run_id=run_id)
-                            new_error_summary = ""
-                            
-                            # Extract error from failed tasks
-                            if new_run.tasks:
-                                for task in new_run.tasks:
-                                    if task.state and task.state.result_state:
-                                        state_val = task.state.result_state.value if hasattr(task.state.result_state, 'value') else str(task.state.result_state)
-                                        if state_val in ("FAILED", "INTERNAL_ERROR"):
-                                            # Get detailed error
-                                            if hasattr(task.state, 'state_message') and task.state.state_message:
-                                                new_error_summary += f"Task {task.task_key}: {task.state.state_message}\n"
-                            
-                            if not new_error_summary:
-                                new_error_summary = f"Run {run_id} failed with result_state={result}. No detailed error available."
-                            
+                            logger.warning(f"[JobFixer] Post-fix run {run_id} still failed (attempt {retry_attempt}/{max_retries}). Extracting full error trace and retrying...")
+
+                            # Extract full error trace from the failed run (same depth as StatusChecker)
+                            new_error_summary = await self._extract_run_error(run_id)
                             logger.info(f"[JobFixer] New error extracted ({len(new_error_summary)} chars). Retrying fix (attempt {retry_attempt + 1}/{max_retries})...")
                             
-                            # Recursive retry with the NEW error
                             return await self.fix_job(
                                 job_id=job_id,
-                                error_summary=new_error_summary[:10000],  # Limit size
+                                error_summary=new_error_summary,
                                 incident_id=incident_id,
                                 retry_attempt=retry_attempt + 1,
-                                max_retries=max_retries
+                                max_retries=max_retries,
                             )
                         else:
                             logger.error(f"[JobFixer] Max retries ({max_retries}) reached. Job {job_id} still failing after {retry_attempt} attempts.")
@@ -448,142 +418,109 @@ class JobFixerAgent:
         past_incidents: list[dict] | None = None,
     ) -> str:
         """
-        PHASE 3: Deep scan entire notebook + comprehensive fix.
-        
-        This uses an enhanced 2-step prompt:
-        1. First, GPT-5.5 scans and lists ALL bugs
-        2. Then generates one comprehensive fix for everything
+        Targeted error fix: repair ONLY the lines that caused the job to fail.
+        Logic, variable names, structure, and style are never changed.
         """
-        
         # ─── Guardrail #7: Sanitise untrusted inputs before prompt interpolation ───
         safe_error = sanitize_error_log(error_summary)
         safe_code = sanitize_notebook_code(notebook_content)
 
-        # Build Databricks context string
-        context_str = "**Databricks Environment:**\n"
-        if databricks_context.get("context_available"):
-            context_str += f"- {len(databricks_context.get('tables', []))} database(s) detected\n"
-            if databricks_context.get('tables'):
-                context_str += f"- Sample catalogs: {', '.join([t.get('note', '') for t in databricks_context['tables'][:3]])}\n"
-        else:
-            context_str += "- Running in isolated/test environment (no live tables detected)\n"
-
-        # Build past-incidents reference block
         past_ref_str = ""
         if past_incidents:
-            past_ref_str = "\n## Bug References — Similar Past Incidents\n"
-            past_ref_str += "These are real incidents AEGIS has fixed before. Use them as hints:\n\n"
+            past_ref_str = "\n## Similar Past Incidents (reference only — do not copy fixes blindly)\n"
             for i, inc in enumerate(past_incidents, 1):
-                past_ref_str += f"**Reference #{i}:** {inc}\n\n"
-        else:
-            past_ref_str = "\n## Bug References\nNo similar past incidents found — rely on code analysis.\n"
+                past_ref_str += f"Reference #{i}: {inc}\n"
 
         prompt = (
-            f"🤖 AEGIS AUTONOMOUS NOTEBOOK REPAIR\n\n"
-            f"## Mission: DEEP SCAN → LIST ALL BUGS → FIX EVERYTHING → PEP8 CLEAN\n\n"
-            f"You are an autonomous reliability AI. A Databricks notebook has failed in production.\n"
-            f"Your job: scan the ENTIRE notebook, understand it deeply, identify ALL bugs, then fix everything in ONE pass.\n\n"
-            f"## Databricks Context\n"
-            f"{context_str}\n"
-            f"{past_ref_str}\n"
-            f"## Current Error (What Triggered This Scan)\n"
+            f"A Databricks notebook job failed with the error below. "
+            f"Fix ONLY the lines that directly caused this error. Touch nothing else.\n\n"
+            f"## Error to Fix\n"
             f"```\n{safe_error}\n```\n\n"
-            f"## Full Notebook Source Code\n"
+            f"## Notebook Source\n"
             f"**Path:** `{notebook_path}`\n"
             f"```python\n{safe_code}\n```\n\n"
-            f"## AUTONOMOUS WORKFLOW\n\n"
-            f"### STEP 1: DEEP SCAN (Understand Everything)\n"
-            f"Read through the ENTIRE notebook carefully. Understand:\n"
-            f"- What is this notebook trying to do?\n"
-            f"- What tables/data does it reference?\n"
-            f"- What transformations/calculations are being performed?\n"
-            f"- What is the intended data flow?\n\n"
-            f"### STEP 2: IDENTIFY ALL BUGS (Complete Audit)\n"
-            f"Scan EVERY line and identify ALL bugs. Check for:\n\n"
-            f"**Syntax & Import Errors:** Import typos, missing imports, undefined variables\n"
-            f"**Schema/Data Errors:** Wrong table names (typos), wrong column names, non-existent columns\n"
-            f"**Math/Logic Errors:** Division by zero, reversed conditions, off-by-one errors\n"
-            f"**PySpark/DataFrame Errors:** Wrong groupBy columns, missing F.col() wrappers, incorrect aggregations\n"
-            f"**Runtime Errors:** Variables used before assignment, wrong function signatures, type mismatches\n"
-            f"**PEP8/Style Issues:** Lines > 120 chars, bare excepts, magic numbers without comments\n\n"
-            f"### STEP 3: LIST ALL BUGS FOUND\n"
-            f"Before fixing, explicitly list every bug. Format: `BUG #X: [description]`\n\n"
-            f"### STEP 4: FIX ALL BUGS (One Comprehensive Fix)\n"
-            f"Generate corrected code that fixes EVERY bug you listed.\n\n"
-            f"**Functional Requirements:**\n"
-            f"✅ Fix ALL import errors | Fix ALL table/column name typos\n"
-            f"✅ Define ALL variables before use | Add safety checks for divisions\n"
-            f"✅ Correct ALL logic errors | Fix ALL PySpark syntax issues\n\n"
-            f"**Code Quality Requirements (PEP8):**\n"
-            f"✅ Follow PEP8: 4-space indentation, max 120 chars per line\n"
-            f"✅ Use descriptive variable names (no single-letter vars except loop counters)\n"
-            f"✅ Add type hints on all function definitions\n"
-            f"✅ Use f-strings for string formatting (not .format() or %)\n"
-            f"✅ No bare `except:` — always catch specific exceptions\n"
-            f"✅ Two blank lines between top-level functions/classes\n"
-            f"✅ Imports grouped: stdlib → third-party → local\n\n"
-            f"### STEP 5: OUTPUT FORMAT\n"
-            f"Return your response in TWO sections:\n\n"
-            f"**Section 1: BUG REPORT**\n"
-            f"```\n"
-            f"BUGS FOUND:\n"
-            f"BUG #1: [description]\n"
-            f"BUG #2: [description]\n"
-            f"...\n"
-            f"TOTAL: X bugs identified\n"
-            f"```\n\n"
-            f"**Section 2: FIXED CODE**\n"
+            f"{past_ref_str}"
+            f"## Non-Negotiable Rules\n"
+            f"1. Fix ONLY what the error above points to. Do not touch unrelated code.\n"
+            f"2. NEVER rename variables, functions, table names, or column names.\n"
+            f"3. NEVER refactor, restructure, or rewrite working code sections.\n"
+            f"4. NEVER add or remove imports unless they are the direct cause of the error.\n"
+            f"5. NEVER add type hints, docstrings, or comments that were not there before.\n"
+            f"6. NEVER reformat or restyle lines that are not part of the fix.\n"
+            f"7. Preserve all Databricks magic comments exactly as-is "
+            f"(# Databricks notebook source, # COMMAND ----------, # MAGIC).\n"
+            f"8. The fix must be the MINIMUM change that makes the job pass.\n\n"
+            f"## Output Format\n"
+            f"Line 1: `FIX: <one sentence describing what you changed>`\n\n"
+            f"Then the complete corrected notebook source:\n"
             f"```python\n"
-            f"[corrected PEP8-compliant notebook code with ALL bugs fixed]\n"
-            f"```\n\n"
-            f"⚠️ CRITICAL: Fix EVERY bug in ONE pass. Code must be PEP8-compliant and production-ready."
+            f"[full notebook with ONLY the error-causing lines corrected]\n"
+            f"```"
         )
-        
+
         _base_system = (
-            "You are AEGIS, an elite autonomous AI reliability engineer and senior Python developer. "
-            "You specialize in deep code analysis, comprehensive bug fixing, and writing clean, production-grade code. "
-            "You NEVER do partial fixes. You scan thoroughly, identify ALL issues, then fix everything at once. "
-            "You are an expert in PySpark, Databricks, Python, and data engineering. "
-            "You ALWAYS write PEP8-compliant code: proper indentation, descriptive names, type hints, specific exception handling. "
-            "You think systematically: understand → scan → reference past bugs → list → fix → clean."
+            "You are a surgical code repair tool. "
+            "Your only job is to fix the specific error that caused a Databricks job to fail. "
+            "You make the MINIMUM change required — nothing more. "
+            "You never refactor, rename, restructure, or improve working code. "
+            "You never add type hints, docstrings, style changes, or cosmetic edits. "
+            "Every line of working code is treated as correct and sacred. "
+            "A good fix changes as few lines as possible."
         )
         messages = [
             SystemMessage(content=injection_resistant_system_message(_base_system)),
             HumanMessage(content=prompt),
         ]
 
-        logger.info(f"[JobFixer] 🧠 Invoking GPT-5.5 for deep scan + comprehensive fix...")
+        logger.info(f"[JobFixer] 🔧 Invoking GPT-5.5 for targeted error fix...")
         try:
             response = await asyncio.wait_for(self.llm.ainvoke(messages), timeout=300)
         except asyncio.TimeoutError:
             raise Exception("GPT-5.5 request timed out after 300s — try again or check VPN/API status")
         full_response = response.content.strip()
-        
-        # Parse response: extract bug list and fixed code
-        if "BUGS FOUND:" in full_response and "FIXED CODE" in full_response:
-            parts = full_response.split("FIXED CODE")
-            bug_list = parts[0]
-            fixed_code_section = parts[1] if len(parts) > 1 else full_response
-            
-            # Log the bug list
-            logger.info(f"[JobFixer] 📋 Bug Analysis:\n{bug_list[:1000]}")  # First 1000 chars
-            
-            # Extract just the code
-            fixed = fixed_code_section.strip()
-        else:
-            # Fallback if format not followed
-            fixed = full_response
-        
-        # Strip code fences if present
-        if "```python" in fixed:
-            fixed = fixed.split("```python")[1].split("```")[0].strip()
-        elif "```" in fixed:
-            parts = fixed.split("```")
-            fixed = parts[1] if len(parts) > 1 else fixed
-            fixed = fixed.strip()
-        
-        logger.success(f"[JobFixer] ✅ Comprehensive fix completed. Fixed code: {len(fixed)} chars")
-        return fixed
+
+        # Extract fix description and code
+        if full_response.startswith("FIX:"):
+            first_newline = full_response.find("\n")
+            fix_line = full_response[:first_newline].strip() if first_newline != -1 else full_response
+            logger.info(f"[JobFixer] 📋 {fix_line}")
+            full_response = full_response[first_newline:].strip() if first_newline != -1 else ""
+
+        # Strip code fences
+        if "```python" in full_response:
+            full_response = full_response.split("```python")[1].split("```")[0].strip()
+        elif "```" in full_response:
+            parts = full_response.split("```")
+            full_response = parts[1].strip() if len(parts) > 1 else full_response
+
+        logger.success(f"[JobFixer] ✅ Targeted fix generated ({len(full_response)} chars)")
+        return full_response
+
+    async def _extract_run_error(self, run_id: int) -> str:
+        """Extract the full Python error trace from a failed run using get_run_output."""
+        errors = []
+        try:
+            run = self.client.jobs.get_run(run_id=run_id)
+            for task in (run.tasks or []):
+                if not (task.state and task.state.result_state):
+                    continue
+                result_val = task.state.result_state.value if hasattr(task.state.result_state, "value") else str(task.state.result_state)
+                if result_val == "SUCCESS":
+                    continue
+                try:
+                    output = self.client.jobs.get_run_output(run_id=task.run_id)
+                    if output.error_trace:
+                        errors.append(f"Task '{task.task_key}':\n{output.error_trace}")
+                    elif output.error:
+                        errors.append(f"Task '{task.task_key}': {output.error}")
+                    elif task.state.state_message:
+                        errors.append(f"Task '{task.task_key}': {task.state.state_message}")
+                except Exception:
+                    if task.state.state_message:
+                        errors.append(f"Task '{task.task_key}': {task.state.state_message}")
+        except Exception as e:
+            return f"Could not retrieve error details: {e}"
+        return "\n\n".join(errors) if errors else f"Run {run_id} failed (no detailed error available)"
 
     def _map_to_git_path(self, databricks_path: str, task_key: str) -> str:
         """Map Databricks workspace path to git repository path."""

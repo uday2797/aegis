@@ -38,10 +38,10 @@ Every data engineering team has woken up at 3am because a Databricks job failed.
 - Lists all available jobs; you select which ones to monitor (single / multiple / all)
 - Reads the **actual error** from the failed Databricks run — not predefined patterns
 - Fetches the **actual notebook source** from Databricks
-- Sends real error + real code to **GPT-5.5**, which deep-scans the notebook, identifies every bug, and returns a fully fixed version
-- Validates the fix (syntax check + lint + PEP8 auto-format) before uploading
-- Uploads the fixed notebook and re-runs the job to verify
-- If re-run fails: extracts the new error, retries the fix up to **3 times**, each time feeding the latest error back to GPT-5.5
+- Sends the full Python traceback + real notebook source to **GPT-5.5**, which makes the **minimum surgical change** required to fix the specific error — logic, variable names, and structure are never touched
+- Validates the fix (syntax check + lint) before uploading — invalid Python is hard-blocked and never uploaded
+- Uploads the fixed notebook, re-runs the job, and monitors to completion
+- If re-run fails: extracts the **full error trace** from that run, rolls back to original, retries up to **3 times**, each time feeding GPT-5.5 the latest real error
 - If all 3 retries fail: **rolls back** the notebook to the original version and escalates to a human
 - If re-run passes: creates a **GitHub PR**, waits for approval, then triggers CD to deploy
 
@@ -85,7 +85,7 @@ AEGIS is built to be **autonomous but safe**. Seven independent guardrails prote
 | 1 | **Confidence Gate** | If RCA confidence < 70%, AEGIS escalates instead of auto-fixing | `workflow.py`, `policy_engine.py` |
 | 2 | **Diff Review** | If LLM returns identical code (zero changes), it is flagged and logged | `guardrails/validators.py` |
 | 3 | **Rollback** | If post-fix run fails, original notebook is restored immediately | `agents/job_fixer.py` |
-| 4 | **Syntax + Lint Check** | Fixed code must pass `ast.parse()` + pyflakes before uploading | `guardrails/validators.py` |
+| 4 | **Syntax + Lint Check** | Fixed code must pass `compile()` syntax check (hard block) + pyflakes lint (warning) before uploading | `guardrails/validators.py` |
 | 5 | **Rate Limiter** | Sliding-window cap: max 5 trigger runs per job per 10 minutes | `guardrails/rate_limiter.py` |
 | 6 | **Audit Log** | Every autonomous action written to an append-only JSONL file | `guardrails/audit_log.py` |
 | 7 | **Prompt Injection Guard** | Untrusted error logs and notebook code are truncated and scanned for injection patterns before LLM calls; every system message includes an injection-resistance instruction | `guardrails/prompt_guard.py` |
@@ -118,13 +118,14 @@ You run AEGIS
     ▼
 [Node 8] Job Fixer (GPT-5.5)
     ├── Discovers Databricks environment (catalogs, schemas)
-    ├── Fetches similar past incidents from ChromaDB
+    ├── Fetches similar past incidents from ChromaDB as reference
     ├── Fetches real notebook source from Databricks
-    ├── Deep scan + comprehensive fix (GPT-5.5 in one pass)
-    ├── Guardrails: Syntax ✓ → Lint ✓ → PEP8 ✓ → Diff ✓
+    ├── Surgical targeted fix — GPT-5.5 changes ONLY the lines the error points to
+    │     (no refactoring, no renames, no style changes, no logic rewrites)
+    ├── Guardrails: Syntax hard-block ✓ → Lint check ✓ → Diff logged ✓
     ├── Uploads fixed notebook → triggers re-run → polls to terminal state
     ├── Re-run PASSED → continue
-    └── Re-run FAILED → extract new error → rollback → retry (max 3x) → escalate if exhausted
+    └── Re-run FAILED → extract full error trace → rollback → retry (max 3x) → escalate if exhausted
     │
 [Node 9]  Email #4 — Fix Complete
 [Node 10] PR Manager — creates GitHub hotfix PR
@@ -360,7 +361,7 @@ python -m pytest tests/ -q
 | Tool | Where used | Purpose |
 |---|---|---|
 | **GPT-4o** (via EPAM DIAL) | `src/diagnosis/rca_agent.py` | Root cause analysis — structured JSON output with confidence score |
-| **GPT-5.5** (via EPAM DIAL) | `src/agents/job_fixer.py` | Deep notebook scan + comprehensive bug fix in one pass |
+| **GPT-5.5** (via EPAM DIAL) | `src/agents/job_fixer.py` | Surgical targeted fix — repairs only the lines that caused the failure; logic and structure never changed |
 | **LangChain** (`AzureChatOpenAI`) | `rca_agent.py`, `job_fixer.py` | LLM integration layer |
 | **LangGraph** | `src/workflow.py` | 15-node async multi-agent state machine orchestrating the healing lifecycle |
 | **MLflow** | `model_monitor.py`, `ml_healer.py`, `ml_model_train.py` | Model registry, drift metrics, version promotion |
@@ -376,7 +377,7 @@ python -m pytest tests/ -q
 | Capability | AEGIS | Typical on-call alert tool |
 |---|---|---|
 | Root cause analysis | GPT-4o reads the real error log | Pattern matching on known errors |
-| Code repair | GPT-5.5 fetches and fixes the actual notebook | Manual fix required |
+| Code repair | GPT-5.5 makes the minimum surgical change to fix the error — business logic is never altered | Manual fix required |
 | Verification | Uploads fix and re-runs the job | No automated verification |
 | Retry loop | Up to 3 retries with the new error each time | Single attempt |
 | Rollback | Automatic if post-fix run fails | Manual rollback |

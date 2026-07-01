@@ -159,7 +159,7 @@ def autoformat_code(code: str) -> str:
         python_src = "".join(python_lines)
         formatted_python = autopep8.fix_code(
             python_src,
-            options={"max_line_length": 120, "aggressive": 1},
+            options={"max_line_length": 120},
         )
 
         # Re-insert magic lines at original positions

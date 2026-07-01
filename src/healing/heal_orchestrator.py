@@ -188,148 +188,49 @@ class HealOrchestrator:
             return f"Could not retrieve error details: {e}"
 
     async def _fix_notebook_and_retry(self, incident_id: str, error_summary: str, client, job_id: int) -> HealResult:
-        """
-        LLM-powered notebook repair:
-        1. Fetch notebook source from Databricks
-        2. Call GPT-4o (DIAL) with error + code → get fixed code
-        3. Upload fixed notebook back to Databricks
-        4. Re-trigger job and verify it succeeds
-        """
-        import base64 as _b64
-        from langchain_openai import AzureChatOpenAI
-        from langchain_core.messages import HumanMessage, SystemMessage
+        """Delegate to JobFixerAgent — single canonical repair path for both entry points."""
+        from src.agents.job_fixer import JobFixerAgent
 
-        logger.info("[HEAL] LLM Notebook Repair | fetching notebook content from Databricks...")
-
+        logger.info("[HEAL] Delegating to JobFixerAgent for surgical notebook repair...")
         try:
-            # Step 1: discover notebook tasks
-            job = client.jobs.get(job_id=job_id)
-            notebooks = []
-            for task in (job.settings.tasks or []):
-                if task.notebook_task:
-                    nb_path = task.notebook_task.notebook_path
-                    exp = client.workspace.export(path=nb_path)
-                    content = _b64.b64decode(exp.content).decode("utf-8")
-                    notebooks.append({"path": nb_path, "task_key": task.task_key, "content": content})
-                    logger.info(f"[HEAL] Fetched notebook '{nb_path}' ({len(content)} chars)")
-
-            if not notebooks:
-                raise Exception("No notebook tasks found in job")
-
-            # Step 2: build LLM
-            llm = AzureChatOpenAI(
-                azure_endpoint=os.environ.get("DIAL_API_ENDPOINT", "https://ai-proxy.lab.epam.com"),
-                api_key=os.environ["DIAL_API_KEY"],
-                azure_deployment=os.environ.get("DIAL_DEPLOYMENT", "gpt-4o"),
-                api_version=os.environ.get("DIAL_API_VERSION", "2025-04-01-preview"),
-                temperature=0,
-                max_tokens=2000,
-                request_timeout=30,
+            fixer = JobFixerAgent(
+                host=os.environ["DATABRICKS_HOST"],
+                token=os.environ["DATABRICKS_TOKEN"],
+                config=self.config,
             )
-
-            # Step 3: ask LLM to fix each notebook
-            fixed_notebooks = []
-            for nb in notebooks:
-                prompt = (
-                    f"A Databricks notebook failed with the following error:\n\n"
-                    f"```\n{error_summary}\n```\n\n"
-                    f"Here is the notebook source:\n\n"
-                    f"```python\n{nb['content']}\n```\n\n"
-                    f"Fix ALL bugs. Return ONLY the corrected notebook source, "
-                    f"keeping the Databricks format exactly "
-                    f"(# Databricks notebook source header and # COMMAND ---------- separators). "
-                    f"No explanations, no markdown fences."
+            result = await fixer.fix_job(
+                job_id=job_id,
+                error_summary=error_summary,
+                incident_id=incident_id,
+            )
+            if result["status"] == "success":
+                fixed_notebooks = result.get("fixed_notebooks", [])
+                run_id = result.get("post_fix_run_id")
+                return HealResult(
+                    incident_id=incident_id,
+                    status=HealStatus.AUTO_HEALED,
+                    action_taken=f"GPT-5.5 surgically fixed {len(fixed_notebooks)} notebook(s) (run_id={run_id})",
+                    outcome=result.get("outcome", "Job completed successfully after repair."),
+                    has_code_fix=True,
+                    fix_files=[
+                        {"path": nb["git_path"], "content": nb["content"], "description": "AEGIS surgical fix"}
+                        for nb in fixed_notebooks
+                    ],
                 )
-                messages = [
-                    SystemMessage(content="You are an expert Databricks/Python engineer. Fix notebook bugs and return only the corrected source code."),
-                    HumanMessage(content=prompt),
-                ]
-                logger.info(f"[HEAL] GPT-4o fixing notebook: {nb['path']}")
-                response = await llm.ainvoke(messages)
-                fixed = response.content.strip()
-                # Strip any accidental code fences
-                if fixed.startswith("```"):
-                    parts = fixed.split("```")
-                    fixed = parts[1] if len(parts) > 1 else fixed
-                    if fixed.startswith("python"):
-                        fixed = fixed[6:]
-                    fixed = fixed.strip()
-                # Look up git path from config (for PR commit)
-                git_path_map = self.config.get("databricks_to_git_path", {})
-                git_path = git_path_map.get(nb["path"]) or git_path_map.get(nb["path"].rstrip(".py"))
-                if not git_path:
-                    slug = nb["task_key"].replace(" ", "_").replace("-", "_").lower()
-                    git_path = f"de_project/notebooks/{slug}.py"
-                fixed_notebooks.append({"path": nb["path"], "git_path": git_path, "original": nb["content"], "fixed": fixed})
-                logger.success(f"[HEAL] GPT-4o generated fix for {nb['path']} → git: {git_path}")
-
-            # Step 4: upload fixed notebooks back to Databricks
-            from databricks.sdk.service.workspace import ImportFormat, Language
-            for nb in fixed_notebooks:
-                encoded = _b64.b64encode(nb["fixed"].encode("utf-8")).decode("utf-8")
-                client.workspace.import_(
-                    path=nb["path"],
-                    content=encoded,
-                    format=ImportFormat.SOURCE,
-                    language=Language.PYTHON,
-                    overwrite=True,
-                )
-                logger.success(f"[HEAL] Uploaded fixed notebook → {nb['path']}")
-
-            # Step 5: re-trigger job and monitor
-            logger.info("[HEAL] Triggering job with fixed notebook...")
-            run = client.jobs.run_now(job_id=job_id)
-            run_id = run.run_id
-            logger.success(f"[HEAL] Post-fix run triggered: run_id={run_id}")
-
-            for _ in range(60):
-                await asyncio.sleep(5)
-                run_state = client.jobs.get_run(run_id=run_id)
-                life = _ev(run_state.state.life_cycle_state) if run_state.state else "UNKNOWN"
-                result = _ev(run_state.state.result_state) if run_state.state and run_state.state.result_state else None
-                logger.info(f"[HEAL] Post-fix run {run_id} state={life}/{result}")
-                if life in ("TERMINATED", "INTERNAL_ERROR", "SKIPPED"):
-                    if result == "SUCCESS":
-                        return HealResult(
-                            incident_id=incident_id,
-                            status=HealStatus.AUTO_HEALED,
-                            action_taken=f"GPT-4o fixed {len(fixed_notebooks)} notebook(s) and retriggered job (run_id={run_id})",
-                            outcome=f"Notebook bugs fixed autonomously. Job run {run_id} completed successfully.",
-                            has_code_fix=True,
-                            fix_files=[
-                                {"path": nb["git_path"], "content": nb["fixed"], "description": "LLM-generated notebook fix (auto-committed by AEGIS)"}
-                                for nb in fixed_notebooks
-                            ],
-                        )
-                    post_error = await self._get_run_error(client, run_id)
-                    return HealResult(
-                        incident_id=incident_id,
-                        status=HealStatus.ESCALATED,
-                        action_taken=f"LLM fix applied but post-fix run {run_id} still failing",
-                        outcome=f"Notebook patched by GPT-4o but run failed. Error: {post_error[:200]}",
-                        has_code_fix=True,
-                        fix_files=[
-                            {"path": nb["git_path"], "content": nb["fixed"], "description": "LLM fix (needs review)"}
-                            for nb in fixed_notebooks
-                        ],
-                        approval_required=True,
-                    )
-
             return HealResult(
                 incident_id=incident_id,
                 status=HealStatus.ESCALATED,
-                action_taken=f"LLM fix applied, post-fix run {run_id} timed out",
-                outcome="Run still in progress after 5 min — escalated for human monitoring.",
-                has_code_fix=True,
+                action_taken="JobFixerAgent repair did not succeed",
+                outcome=result.get("outcome", "Fix failed — manual review required."),
+                has_code_fix=bool(result.get("fixed_notebooks")),
                 approval_required=True,
             )
-
         except Exception as e:
-            logger.error(f"[HEAL] LLM notebook repair failed: {e}")
+            logger.error(f"[HEAL] JobFixerAgent delegation failed: {e}")
             return HealResult(
                 incident_id=incident_id,
                 status=HealStatus.ESCALATED,
-                action_taken="LLM notebook repair encountered an error — escalated",
+                action_taken="Notebook repair encountered an error — escalated",
                 outcome=str(e),
                 approval_required=True,
             )
