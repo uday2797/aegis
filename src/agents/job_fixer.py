@@ -474,13 +474,7 @@ class JobFixerAgent:
             past_ref_str = "\n## Bug References — Similar Past Incidents\n"
             past_ref_str += "These are real incidents AEGIS has fixed before. Use them as hints:\n\n"
             for i, inc in enumerate(past_incidents, 1):
-                meta = inc.get("metadata", inc)
-                past_ref_str += (
-                    f"**Reference #{i}:**\n"
-                    f"- Root Cause: {meta.get('root_cause', 'N/A')}\n"
-                    f"- Action Taken: {meta.get('action_taken', 'N/A')}\n"
-                    f"- Outcome: {meta.get('outcome', 'N/A')}\n\n"
-                )
+                past_ref_str += f"**Reference #{i}:** {inc}\n\n"
         else:
             past_ref_str = "\n## Bug References\nNo similar past incidents found — rely on code analysis.\n"
 
