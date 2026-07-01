@@ -114,9 +114,9 @@ class RCAAgent:
             api_key=api_key,
             azure_deployment=deployment,
             api_version=api_version,
-            temperature=0,
-            max_tokens=2000,
-            request_timeout=30,
+            temperature=1,      # reasoning models require temperature=1
+            max_tokens=8000,    # reasoning model: needs budget for chain-of-thought + JSON output
+            request_timeout=120,
         )
 
     async def diagnose(self, context: IncidentContext) -> RCAResult:

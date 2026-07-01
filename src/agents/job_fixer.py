@@ -59,8 +59,8 @@ class JobFixerAgent:
             api_key=api_key,
             azure_deployment=os.environ.get("DIAL_DEPLOYMENT", "gpt-5.5-2026-04-24"),  # GPT-5.5 for deep repair
             api_version=os.environ.get("DIAL_API_VERSION", "2025-04-01-preview"),
-            temperature=0,
-            max_tokens=4000,
+            temperature=1,      # reasoning models require temperature=1
+            max_tokens=16000,   # reasoning model: reserves tokens for chain-of-thought + full code output
             request_timeout=300,  # 5 minutes — GPT-5.5 needs time for deep scan
         )
 
