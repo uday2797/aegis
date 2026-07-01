@@ -491,8 +491,8 @@ class MailSenderAgent:
             f"🏃 Retraining Run: {run_id}\n\n"
             f"📊 ACCURACY IMPROVEMENT:\n"
             f"  Before: {old_accuracy:.1%}\n"
-            f"  After:  {new_accuracy:.1%}\n"
-            f"  Delta:  +{(new_accuracy - old_accuracy):.1%}\n\n"
+            f"  After:  {f'{new_accuracy:.1%}' if new_accuracy is not None else 'N/A (MLflow unavailable)'}\n"
+            f"  Delta:  {f'+{(new_accuracy - old_accuracy):.1%}' if new_accuracy is not None else 'N/A'}\n\n"
             f"⏱️  MTTR: {mttr:.0f}s ({mttr/60:.1f} min)\n\n"
             f"✅ Model reregistered and healthy. No further action required."
         )

@@ -388,7 +388,7 @@ async def failure_alert_node(state: AEGISState) -> AEGISState:
     
     from src.diagnosis.context_assembler import ContextAssembler
     from src.knowledge.incident_store import IncidentKnowledgeStore
-    _ks = IncidentKnowledgeStore(state["config"].get("knowledge_store", {"persist_dir": "./data/knowledge_store"}))
+    _ks = IncidentKnowledgeStore(state["config"].get("knowledge_store", {"persist_dir": "./data/knowledge_store", "collection_name": "aegis_incidents"}))
     assembler = ContextAssembler(
         knowledge_store=_ks,
         workspace_host=state["workspace_host"],

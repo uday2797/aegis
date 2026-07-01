@@ -56,7 +56,7 @@ async def test_report_has_root_cause(orchestrator):
     orchestrator.inject_failure({"type": "data_corruption", "null_pct": 15.0})
     report = await orchestrator.run_once()
     if report is not None:
-        assert hasattr(report, "root_cause") or hasattr(report, "rca_summary")
+        assert hasattr(report, "root_cause")
 
 
 async def test_mttr_is_numeric(orchestrator):
