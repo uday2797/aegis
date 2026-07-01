@@ -1,5 +1,6 @@
 bundle:
   name: aegis-de-project
+  # Redeployed to reset failing_notebook to broken state for AEGIS demo
 
 workspace:
   host: https://dbc-c486d425-ef89.cloud.databricks.com/
