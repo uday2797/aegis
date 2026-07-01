@@ -55,7 +55,25 @@ job_selector → status_check → initial_email
   → [healthy] → END
 ```
 
+**Routing is exclusive:** `route_after_initial_email` sends a run down the DE fix path OR the ML heal path, never both. The healthy path skips `incident_report` entirely — this is intentional (no incident = no report).
+
 `failure_alert_node` is where RCA runs and the confidence gate lives. If `rca.confidence < 70`, `fix_status` is set to `"escalated"` and `route_after_rca` routes straight to `incident_report`, skipping the fixer.
+
+### ML monitoring path (`src/agents/model_monitor.py` + `src/agents/ml_healer.py`)
+
+`ModelMonitorAgent.check_models()` queries MLflow for Production model versions and injects synthetic drift metrics. By default, `sales_forecast_v3` has a 35% random chance of appearing degraded. Set `AEGIS_FORCE_ML_DRIFT=true` to make it always trigger (demo use).
+
+`MLHealerAgent.heal()` flow:
+1. Looks up `healing.ml_retraining_job_name` in config (`[AEGIS ML] Model Retraining Pipeline`) by name in Databricks
+2. Triggers the job, passes `model_name` as a parameter
+3. Polls `_wait_for_run()` until terminal state — capped at `MAX_POLLS = 240` (2 hours)
+4. Fetches new model version metrics from MLflow; handles `None` if MLflow unavailable
+5. If `new_accuracy - old_accuracy >= 0.005`: archives all current Production versions (loop variable captured by value to avoid closure bug), registers new version as Production
+6. Sends `ml_healing_complete` or `ml_healing_failed` email
+
+The retraining notebook (`de_project/notebooks/ml_model_train.py`) falls back to 10k synthetic rows if the configured Delta feature table is not found — so the demo works without a real feature table.
+
+**Databricks ML one-time setup:** Before `MLHealerAgent` can compare and promote, a baseline Production model must exist. Run `[AEGIS ML] Model Retraining Pipeline` once manually in the Databricks UI, then promote the registered version to Production in the MLflow registry.
 
 ### JobFixerAgent — surgical repair philosophy (`src/agents/job_fixer.py`)
 
@@ -68,6 +86,10 @@ Fix pipeline per notebook:
 4. `compute_diff` → logged to audit trail
 5. Upload via Databricks SDK `workspace.import_`
 6. Re-run job and poll; on failure → `_extract_run_error` (uses `get_run_output` for full traceback) → rollback → recursive retry (max 3)
+
+### Rate limiter (`src/guardrails/rate_limiter.py`)
+
+`RateLimiter.check_and_record()` is the atomic method to use — it checks and records in a single call to prevent TOCTOU races. `check()` + `record_trigger()` called separately is a bug pattern; use `check_and_record()` instead.
 
 ### Guardrails (`src/guardrails/`)
 
@@ -106,4 +128,23 @@ All tests run with `SIMULATION_MODE=true` and fake Databricks credentials (set i
 
 ## Environment variables
 
-Required for production run: `DIAL_API_KEY`, `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_USER_EMAIL`. See `.env.example` for the full list. `DIAL_DEPLOYMENT` defaults to `gpt-5.5-2026-04-24` (job fixer) and `DIAL_RCA_DEPLOYMENT` defaults to `gpt-4o` (RCA agent).
+Required for production run: `DIAL_API_KEY`, `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_USER_EMAIL`. See `.env.example` for the full list.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DIAL_DEPLOYMENT` | `gpt-5.5-2026-04-24` | Model for `JobFixerAgent` (surgical notebook repair) |
+| `DIAL_RCA_DEPLOYMENT` | `gpt-4o` | Model for `RCAAgent` (structured JSON root cause analysis) |
+| `DATABRICKS_USER_EMAIL` | — | Expands `${DATABRICKS_USER_EMAIL}` placeholders in `config.yaml` notebook paths |
+| `MLFLOW_TRACKING_URI` | `databricks` | Set to `databricks` to use Databricks-managed MLflow (no separate server); uses `DATABRICKS_HOST` + `DATABRICKS_TOKEN` |
+| `AEGIS_FORCE_ML_DRIFT` | `false` | Set `true` to guarantee `ModelMonitorAgent` reports `sales_forecast_v3` as degraded — for demo runs; overrides the 35% random roll |
+| `SIMULATION_MODE` | `false` | Set `true` in tests to skip real API calls; `conftest.py` sets this automatically |
+
+**`DIAL_DEPLOYMENT` vs `DIAL_RCA_DEPLOYMENT` are intentionally different.** GPT-5.5 for repair, GPT-4o for RCA. Do not unify them — different tasks need different model characteristics.
+
+**`RCAAgent` config keys** (`rca.model`, `rca.temperature`) are overridden by `DIAL_RCA_DEPLOYMENT` env var at runtime. Config values are fallback defaults only.
+
+## Intentional design decisions (not bugs)
+
+- **Healthy path skips `incident_report`**: `route_after_initial_email` has a `"healthy"` edge that goes directly to END. No incident, no report. This is intentional.
+- **Different models for fixer vs RCA**: `DIAL_DEPLOYMENT` and `DIAL_RCA_DEPLOYMENT` are separate env vars by design. Do not merge them.
+- **`failing_notebook.py` is broken intentionally**: Do not fix it — it is the demo target AEGIS repairs. CI lint explicitly skips it.

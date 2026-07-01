@@ -25,6 +25,8 @@ data/
 .vscode/
 .idea/
 *.swp
+.codemie
+.claude
 
 # OS
 .DS_Store

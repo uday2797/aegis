@@ -296,15 +296,15 @@ Copy `.env.example` to `.env` and fill in your values:
 # EPAM DIAL API (Azure OpenAI-compatible proxy)
 DIAL_API_KEY=your-dial-api-key
 DIAL_API_ENDPOINT=https://ai-proxy.lab.epam.com
-DIAL_DEPLOYMENT=gpt-4o
+DIAL_DEPLOYMENT=gpt-5.5-2026-04-24      # GPT-5.5 for surgical notebook repair
+DIAL_RCA_DEPLOYMENT=gpt-4o              # GPT-4o for root cause analysis
 DIAL_API_VERSION=2025-04-01-preview
 
 # Databricks
 DATABRICKS_HOST=https://your-workspace.azuredatabricks.net
 DATABRICKS_TOKEN=your-databricks-token
-
-# Your Databricks user email — resolves notebook paths in config.yaml
-DATABRICKS_USER_EMAIL=you@company.com
+DATABRICKS_JOB_ID=your-failing-job-id   # ID of the job to monitor
+DATABRICKS_USER_EMAIL=you@company.com   # resolves ${DATABRICKS_USER_EMAIL} in config.yaml
 
 # Gmail notifications
 GMAIL_SENDER=your@gmail.com
@@ -316,14 +316,20 @@ GITHUB_TOKEN=your-github-pat
 GITHUB_REPO_OWNER=your-org
 GITHUB_REPO_NAME=your-repo
 
-# MLflow (optional — AEGIS simulates if not set)
-MLFLOW_TRACKING_URI=https://your-mlflow-server
+# MLflow — "databricks" uses Databricks-managed MLflow (no separate server needed)
+# Uses DATABRICKS_HOST + DATABRICKS_TOKEN above automatically
+MLFLOW_TRACKING_URI=databricks
 
 # AEGIS mode
 SIMULATION_MODE=false   # true = use simulated data (demo), false = real Databricks
+
+# Demo flags
+AEGIS_FORCE_ML_DRIFT=false  # set true to guarantee ML drift triggers (override 35% random)
 ```
 
-> **Note on `DATABRICKS_USER_EMAIL`:** `config.yaml` uses `${DATABRICKS_USER_EMAIL}` placeholders for notebook path mapping. Setting this env var is all that is needed — no personal email in committed files.
+> **`DATABRICKS_USER_EMAIL`:** `config.yaml` uses `${DATABRICKS_USER_EMAIL}` placeholders for notebook path mapping. Setting this env var is all that is needed — no personal email in committed files.
+
+> **`DIAL_DEPLOYMENT` vs `DIAL_RCA_DEPLOYMENT`:** Intentionally different models. GPT-5.5 handles notebook repair (surgical line edits); GPT-4o handles RCA (structured JSON reasoning with chain-of-thought). Both served via EPAM DIAL.
 
 ### 3. Deploy the Databricks test jobs
 
@@ -335,6 +341,17 @@ databricks bundle deploy --target dev
 This creates two jobs in your Databricks workspace:
 - **`[AEGIS Test] Failing Data Pipeline`** — intentionally broken notebook AEGIS will fix autonomously
 - **`[AEGIS ML] Model Retraining Pipeline`** — triggered automatically if ML drift is detected
+
+### 3b. One-time Databricks ML setup (required for real ML demo)
+
+Before AEGIS can monitor and promote models, there must be a baseline Production version in the MLflow registry:
+
+1. In the Databricks UI, navigate to **Workflows → `[AEGIS ML] Model Retraining Pipeline`**
+2. Click **Run now** to run the job once manually
+3. After it completes, go to **Machine Learning → Models → `sales_forecast_v3`**
+4. Find the newly registered version and transition it to **Production** stage
+
+From this point on, AEGIS can compare future retrained versions against this baseline and auto-promote if accuracy improves ≥ 0.5%.
 
 ### 4. Run AEGIS
 
@@ -353,6 +370,24 @@ AEGIS will:
 ```bash
 python -m pytest tests/ -q
 ```
+
+---
+
+## Hackathon Demo: Two-Run Video Strategy
+
+To show both the DE and ML paths in a single video:
+
+**Run 1 — DE path (job self-healing):**
+1. Ensure `AEGIS_FORCE_ML_DRIFT=false` in `.env`
+2. Start AEGIS, select the failing job, skip ML monitoring
+3. AEGIS detects failure → RCA → surgical fix → re-run passes → PR → CD deploy → confirmation email
+
+**Run 2 — ML path (model drift & retraining):**
+1. Set `AEGIS_FORCE_ML_DRIFT=true` in `.env` (guarantees drift; overrides the 35% random roll)
+2. Start AEGIS, select a healthy job (or skip job monitoring), enable ML monitoring
+3. AEGIS detects `sales_forecast_v3` degradation → emails drift alert → triggers `[AEGIS ML] Model Retraining Pipeline` → polls until complete → compares accuracy in MLflow → promotes to Production → sends healing complete email
+
+> The two paths are mutually exclusive per run — `route_after_initial_email` routes to either DE or ML, never both. Show them in separate video segments.
 
 ---
 
