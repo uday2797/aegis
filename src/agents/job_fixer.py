@@ -388,7 +388,7 @@ class JobFixerAgent:
             store = IncidentKnowledgeStore(
                 self.config.get("knowledge_store", {"persist_dir": "./data/knowledge_store", "collection_name": "aegis_incidents"})
             )
-            results = store.search(query=error_summary[:500], top_k=3)
+            results = await store.find_similar(query=error_summary[:500], k=3)
             if results:
                 logger.info(f"[JobFixer] 📚 Found {len(results)} similar past incident(s) for context")
             else:
