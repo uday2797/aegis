@@ -57,7 +57,7 @@ class JobFixerAgent:
         return AzureChatOpenAI(
             azure_endpoint=os.environ.get("DIAL_API_ENDPOINT", "https://ai-proxy.lab.epam.com"),
             api_key=api_key,
-            azure_deployment=os.environ.get("DIAL_DEPLOYMENT", "gpt-5.5-2026-04-24"),
+            azure_deployment=os.environ.get("DIAL_DEPLOYMENT", "gpt-5.5-2026-04-24"),  # GPT-5.5 for deep repair
             api_version=os.environ.get("DIAL_API_VERSION", "2025-04-01-preview"),
             temperature=0,
             max_tokens=4000,

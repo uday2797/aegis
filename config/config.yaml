@@ -15,7 +15,7 @@ detection:
     multiplier: 3.0                # alert if job takes 3x P95 runtime
 
 rca:
-  llm_model: "gpt-4o"         # override with DIAL_DEPLOYMENT env var
+  llm_model: "gpt-5.5-2026-04-24"  # override with DIAL_DEPLOYMENT env var
   max_log_lines: 100
   similar_incidents_k: 5
   confidence_high: 85

@@ -102,7 +102,7 @@ class RCAAgent:
         # EPAM DIAL API — Azure OpenAI-compatible proxy
         api_key = os.environ.get("DIAL_API_KEY")
         endpoint = os.environ.get("DIAL_API_ENDPOINT", "https://ai-proxy.lab.epam.com")
-        deployment = os.environ.get("DIAL_DEPLOYMENT", "gpt-4o")
+        deployment = os.environ.get("DIAL_DEPLOYMENT", "gpt-5.5-2026-04-24")
         api_version = os.environ.get("DIAL_API_VERSION", "2025-04-01-preview")
 
         if not api_key:
