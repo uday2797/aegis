@@ -26,6 +26,7 @@ jobs:
     name: Deploy DAB Bundle
     runs-on: ubuntu-latest
     environment: production
+    if: github.event.inputs.confirm_destroy != 'DESTROY'
 
     steps:
       - uses: actions/checkout@v4
