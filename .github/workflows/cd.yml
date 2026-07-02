@@ -70,8 +70,8 @@ jobs:
     name: Destroy DAB Bundle
     runs-on: ubuntu-latest
     environment: production
-    # Only allow manual trigger for destroy
-    if: github.event_name == 'workflow_dispatch'
+    # Only runs on manual trigger AND only when confirm_destroy is explicitly "DESTROY"
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_destroy == 'DESTROY'
 
     steps:
       - uses: actions/checkout@v4
