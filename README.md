@@ -342,16 +342,56 @@ This creates two jobs in your Databricks workspace:
 - **`[AEGIS Test] Failing Data Pipeline`** — intentionally broken notebook AEGIS will fix autonomously
 - **`[AEGIS ML] Model Retraining Pipeline`** — triggered automatically if ML drift is detected
 
-### 3b. One-time Databricks ML setup (required for real ML demo)
+### 3b. One-time Databricks ML setup (required for ML demo)
 
-Before AEGIS can monitor and promote models, there must be a baseline Production version in the MLflow registry:
+AEGIS needs a baseline Production model in the MLflow registry before it can monitor and promote. Do this once after the first bundle deploy.
 
-1. In the Databricks UI, navigate to **Workflows → `[AEGIS ML] Model Retraining Pipeline`**
-2. Click **Run now** to run the job once manually
-3. After it completes, go to **Machine Learning → Models → `sales_forecast_v3`**
-4. Find the newly registered version and transition it to **Production** stage
+**a) Run the retraining job manually**
 
-From this point on, AEGIS can compare future retrained versions against this baseline and auto-promote if accuracy improves ≥ 0.5%.
+1. In the Databricks UI go to **Workflows → `[AEGIS ML] Model Retraining Pipeline`**
+2. Click **Run now**
+3. Wait for it to complete (≈ 2–3 min on a small cluster)
+
+**b) Register the model from the run**
+
+The notebook logs the model as a run artifact but does not auto-register it (to avoid Unity Catalog permission errors). You must register it manually:
+
+1. Go to **Experiments** in the left nav → open the experiment `/Users/<your-email>/sales_forecast_v3`
+2. Click the run named `aegis_retrain_manual`
+3. Scroll to **Artifacts → model** and click **"Register Model"**
+4. Choose **"Create New Model"** → name it exactly **`sales_forecast_v3`** → click **Register**
+
+> Register it in the **workspace model registry** (not Unity Catalog). AEGIS uses the stage-based API (`get_latest_versions(stages=["Production"])`) which only works against the workspace registry.
+
+**c) Promote to Production**
+
+1. Go to **Models** in the left nav → click **`sales_forecast_v3`**
+2. Click **Version 1**
+3. Click the **Stage** dropdown → **Transition to → Production** → confirm
+
+AEGIS can now compare every future retrained version against this baseline and auto-promote if accuracy improves ≥ 0.5%.
+
+### 3c. Testing the ML path
+
+Once the Production baseline exists, verify end-to-end ML healing:
+
+1. In `.env`, set `AEGIS_FORCE_ML_DRIFT=true` (guarantees drift is detected; overrides the normal 35% random roll)
+2. Run AEGIS:
+   ```bash
+   python demo/production_multi_agent.py
+   ```
+3. At the prompts: select any healthy job (or skip), then **enable ML monitoring**
+
+AEGIS will:
+- Query MLflow → detect `sales_forecast_v3` as degraded
+- Send a drift alert email
+- Trigger `[AEGIS ML] Model Retraining Pipeline` in Databricks
+- Poll until the job completes
+- Compare new accuracy vs the Production baseline in MLflow
+- If improved ≥ 0.5%: archive old version, register new version as Production
+- Send a healing complete (or failed) email
+
+**After testing**, set `AEGIS_FORCE_ML_DRIFT=false` in `.env` to revert to natural 35% random drift detection.
 
 ### 4. Run AEGIS
 
