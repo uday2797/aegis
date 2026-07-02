@@ -38,11 +38,11 @@ Every data engineering team has woken up at 3am because a Databricks job failed.
 - Lists all available jobs; you select which ones to monitor (single / multiple / all)
 - Reads the **actual error** from the failed Databricks run — not predefined patterns
 - Fetches the **actual notebook source** from Databricks
-- Sends the full Python traceback + real notebook source to **GPT-5.5**, which makes the **minimum surgical change** required to fix the specific error — logic, variable names, and structure are never touched
+- Sends the full Python traceback + real notebook source to **GPT-5.5**, which does a **comprehensive whole-notebook scan** — it fixes ALL bugs in one pass, not just the triggering error, so a single repair attempt covers every issue that would cause a re-run to fail
 - Validates the fix (syntax check + lint) before uploading — invalid Python is hard-blocked and never uploaded
 - Uploads the fixed notebook, re-runs the job, and monitors to completion
 - If re-run fails: extracts the **full error trace** from that run, rolls back to original, retries up to **3 times**, each time feeding GPT-5.5 the latest real error
-- If all 3 retries fail: **rolls back** the notebook to the original version and escalates to a human
+- If all 3 retries fail: **rolls back** the notebook to the original version and sends a **high-priority escalation email** to the on-call team
 - If re-run passes: creates a **GitHub PR**, waits for approval, then triggers CD to deploy
 
 ### ML Model Monitoring & Auto-Retraining (opt-in)
@@ -120,12 +120,12 @@ You run AEGIS
     ├── Discovers Databricks environment (catalogs, schemas)
     ├── Fetches similar past incidents from ChromaDB as reference
     ├── Fetches real notebook source from Databricks
-    ├── Surgical targeted fix — GPT-5.5 changes ONLY the lines the error points to
-    │     (no refactoring, no renames, no style changes, no logic rewrites)
+    ├── Comprehensive whole-notebook scan — GPT-5.5 fixes ALL bugs in a single pass
+    │     (no refactoring, no renames, no style changes, no logic rewrites — only bug fixes)
     ├── Guardrails: Syntax hard-block ✓ → Lint check ✓ → Diff logged ✓
     ├── Uploads fixed notebook → triggers re-run → polls to terminal state
     ├── Re-run PASSED → continue
-    └── Re-run FAILED → extract full error trace → rollback → retry (max 3x) → escalate if exhausted
+    └── Re-run FAILED → extract full error trace → rollback → retry (max 3x) → high-priority escalation email if exhausted
     │
 [Node 9]  Email #4 — Fix Complete
 [Node 10] PR Manager — creates GitHub hotfix PR
@@ -233,7 +233,7 @@ aegis/
 ├── de_project/                   # Databricks Asset Bundle (DAB)
 │   ├── databricks.yml
 │   ├── notebooks/
-│   │   ├── failing_notebook.py   # Intentionally broken notebook (AEGIS test target)
+│   │   ├── failing_notebook.py   # 10 production-grade bugs — AEGIS demo target (DO NOT fix manually)
 │   │   ├── 01_ingest.py          # Sample ingest notebook
 │   │   ├── 02_transform.py       # Sample transform notebook
 │   │   └── ml_model_train.py     # ML retraining notebook (GradientBoosting + MLflow)
@@ -296,14 +296,14 @@ Copy `.env.example` to `.env` and fill in your values:
 # EPAM DIAL API (Azure OpenAI-compatible proxy)
 DIAL_API_KEY=your-dial-api-key
 DIAL_API_ENDPOINT=https://ai-proxy.lab.epam.com
-DIAL_DEPLOYMENT=gpt-5.5-2026-04-24      # GPT-5.5 for surgical notebook repair
+DIAL_DEPLOYMENT=gpt-5.5-2026-04-24      # GPT-5.5 for comprehensive notebook scan & repair
 DIAL_RCA_DEPLOYMENT=gpt-4o              # GPT-4o for root cause analysis
 DIAL_API_VERSION=2025-04-01-preview
 
 # Databricks
 DATABRICKS_HOST=https://your-workspace.azuredatabricks.net
 DATABRICKS_TOKEN=your-databricks-token
-DATABRICKS_JOB_ID=your-failing-job-id   # ID of the job to monitor
+DATABRICKS_JOB_ID=your-failing-job-id   # ID of the failing job to monitor (e.g. 315419121224536)
 DATABRICKS_USER_EMAIL=you@company.com   # resolves ${DATABRICKS_USER_EMAIL} in config.yaml
 
 # Gmail notifications
@@ -419,8 +419,8 @@ To show both the DE and ML paths in a single video:
 
 **Run 1 — DE path (job self-healing):**
 1. Ensure `AEGIS_FORCE_ML_DRIFT=false` in `.env`
-2. Start AEGIS, select the failing job, skip ML monitoring
-3. AEGIS detects failure → RCA → surgical fix → re-run passes → PR → CD deploy → confirmation email
+2. Start AEGIS, select the failing job (`[AEGIS Test] Failing Data Pipeline`), skip ML monitoring
+3. AEGIS detects failure → RCA → comprehensive notebook scan (GPT-5.5 fixes ALL 10 bugs in one pass) → re-run passes → PR → CD deploy → confirmation email
 
 **Run 2 — ML path (model drift & retraining):**
 1. Set `AEGIS_FORCE_ML_DRIFT=true` in `.env` (guarantees drift; overrides the 35% random roll)
@@ -436,7 +436,7 @@ To show both the DE and ML paths in a single video:
 | Tool | Where used | Purpose |
 |---|---|---|
 | **GPT-4o** (via EPAM DIAL) | `src/diagnosis/rca_agent.py` | Root cause analysis — structured JSON output with confidence score |
-| **GPT-5.5** (via EPAM DIAL) | `src/agents/job_fixer.py` | Surgical targeted fix — repairs only the lines that caused the failure; logic and structure never changed |
+| **GPT-5.5** (via EPAM DIAL) | `src/agents/job_fixer.py` | Comprehensive whole-notebook scan — fixes ALL bugs in a single pass (not just the triggering error); logic and structure never changed |
 | **LangChain** (`AzureChatOpenAI`) | `rca_agent.py`, `job_fixer.py` | LLM integration layer |
 | **LangGraph** | `src/workflow.py` | 15-node async multi-agent state machine orchestrating the healing lifecycle |
 | **MLflow** | `model_monitor.py`, `ml_healer.py`, `ml_model_train.py` | Model registry, drift metrics, version promotion |
@@ -452,7 +452,7 @@ To show both the DE and ML paths in a single video:
 | Capability | AEGIS | Typical on-call alert tool |
 |---|---|---|
 | Root cause analysis | GPT-4o reads the real error log | Pattern matching on known errors |
-| Code repair | GPT-5.5 makes the minimum surgical change to fix the error — business logic is never altered | Manual fix required |
+| Code repair | GPT-5.5 scans the entire notebook and fixes ALL bugs in one pass — business logic is never altered | Manual fix required |
 | Verification | Uploads fix and re-runs the job | No automated verification |
 | Retry loop | Up to 3 retries with the new error each time | Single attempt |
 | Rollback | Automatic if post-fix run fails | Manual rollback |

@@ -75,17 +75,20 @@ The retraining notebook (`de_project/notebooks/ml_model_train.py`) falls back to
 
 **Databricks ML one-time setup:** Before `MLHealerAgent` can compare and promote, a baseline Production model must exist. Run `[AEGIS ML] Model Retraining Pipeline` once manually in the Databricks UI, then promote the registered version to Production in the MLflow registry.
 
-### JobFixerAgent — surgical repair philosophy (`src/agents/job_fixer.py`)
+### JobFixerAgent — comprehensive scan philosophy (`src/agents/job_fixer.py`)
 
-The GPT-5.5 prompt is deliberately **surgical**: fix only the lines the error points to, never refactor, never rename, never add type hints or style changes. The system message frames the model as "a surgical code repair tool", not a developer. This constraint is critical — changing it back to "fix all bugs + PEP8 clean" causes the model to rewrite entire notebooks.
+The GPT-5.5 prompt does a **comprehensive whole-notebook scan**: fix ALL bugs in a single pass, not just the error that triggered the alert. The system message frames the model as "a comprehensive notebook repair tool for production Databricks jobs". This is intentional — production systems have only a few retries, so every bug must be caught and fixed upfront. The hard constraint is: NEVER rename variables, NEVER refactor, NEVER add type hints or style changes — only fix runtime bugs.
+
+`_comprehensive_scan_and_fix` sends the full notebook source + current error to GPT-5.5 and asks it to scan every cell and fix any issue that would cause a runtime failure (typos in identifiers, wrong function calls, incorrect argument types, missing/wrong imports, logic errors that raise exceptions).
 
 Fix pipeline per notebook:
-1. `_comprehensive_scan_and_fix` → GPT-5.5 targeted fix
+1. `_comprehensive_scan_and_fix` → GPT-5.5 whole-notebook fix (all bugs in one pass)
 2. `validate_python_code` → `compile()` hard block (invalid Python never uploaded)
 3. `lint_python_code` → pyflakes warning only (non-blocking)
 4. `compute_diff` → logged to audit trail
 5. Upload via Databricks SDK `workspace.import_`
 6. Re-run job and poll; on failure → `_extract_run_error` (uses `get_run_output` for full traceback) → rollback → recursive retry (max 3)
+7. All 3 retries exhausted → notebook rolled back to original + high-priority escalation email via `MailSenderAgent` with stage `"escalation"` and reason `"AUTONOMOUS FIX FAILED — all 3 repair attempts exhausted"`
 
 ### Rate limiter (`src/guardrails/rate_limiter.py`)
 
@@ -118,7 +121,7 @@ ChromaDB with a custom lightweight keyword-hash embedding (no model download). F
 
 ### Databricks Asset Bundle (`de_project/`)
 
-`de_project/notebooks/failing_notebook.py` is **intentionally broken** — it is the AEGIS demo target that AEGIS autonomously detects and repairs. CI lint skips it explicitly. Do not fix it.
+`de_project/notebooks/failing_notebook.py` contains **10 intentional production-grade bugs** — it is the AEGIS demo target (Sales Data Quality Validation Pipeline). AEGIS detects the failure, runs RCA, then GPT-5.5 scans the entire notebook and fixes all 10 bugs in one pass. CI lint skips it explicitly. Do not fix it manually.
 
 ## Tests
 
@@ -132,7 +135,7 @@ Required for production run: `DIAL_API_KEY`, `DATABRICKS_HOST`, `DATABRICKS_TOKE
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DIAL_DEPLOYMENT` | `gpt-5.5-2026-04-24` | Model for `JobFixerAgent` (surgical notebook repair) |
+| `DIAL_DEPLOYMENT` | `gpt-5.5-2026-04-24` | Model for `JobFixerAgent` (comprehensive notebook scan and repair) |
 | `DIAL_RCA_DEPLOYMENT` | `gpt-4o` | Model for `RCAAgent` (structured JSON root cause analysis) |
 | `DATABRICKS_USER_EMAIL` | — | Expands `${DATABRICKS_USER_EMAIL}` placeholders in `config.yaml` notebook paths |
 | `MLFLOW_TRACKING_URI` | `databricks` | Set to `databricks` to use Databricks-managed MLflow (no separate server); uses `DATABRICKS_HOST` + `DATABRICKS_TOKEN` |
@@ -147,4 +150,4 @@ Required for production run: `DIAL_API_KEY`, `DATABRICKS_HOST`, `DATABRICKS_TOKE
 
 - **Healthy path skips `incident_report`**: `route_after_initial_email` has a `"healthy"` edge that goes directly to END. No incident, no report. This is intentional.
 - **Different models for fixer vs RCA**: `DIAL_DEPLOYMENT` and `DIAL_RCA_DEPLOYMENT` are separate env vars by design. Do not merge them.
-- **`failing_notebook.py` is broken intentionally**: Do not fix it — it is the demo target AEGIS repairs. CI lint explicitly skips it.
+- **`failing_notebook.py` has 10 production bugs intentionally**: It is a realistic Sales Data Quality Validation Pipeline with these deliberate bugs: (1) `import pandsa` typo, (2) `dedup_df.printSchema()` returns `None`, (3) `schema_check.fieldNames()` called on `None`, (4) `"transacion_id"` column typo in `.select()`, (5) `spark_round(..., "2")` — string `"2"` instead of int, (6) invalid `{"revenue": "stdev"}` dict in `.agg()`, (7) `converted_count / void_count` — `void_count` is always 0 (ZeroDivisionError), (8) `regexp_replace` not imported (NameError), (9) `.collect()[0][0]` on empty "Northwest" filter (IndexError), (10) `report_df.saveAsTable(...)` — should be `report_df.write.saveAsTable(...)`. Do not fix it — AEGIS repairs it. CI lint explicitly skips it.
