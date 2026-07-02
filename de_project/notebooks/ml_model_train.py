@@ -134,8 +134,11 @@ print(f"[AEGIS ML] Train={len(X_train):,} | Test={len(X_test):,}")
 
 # ── MLflow experiment setup ──────────────────────────────────────────────────
 
+# Set MLflow registry URI for Spark Connect compatibility
+mlflow.set_registry_uri("databricks-uc")
+
 current_user = spark.sql("SELECT current_user()").collect()[0][0]
-EXPERIMENT_NAME = f"/Users/{current_user}/AEGIS/{MODEL_NAME}"
+EXPERIMENT_NAME = f"/Users/{current_user}/{MODEL_NAME}"
 mlflow.set_experiment(EXPERIMENT_NAME)
 
 # Fetch baseline accuracy from the current Production model (if exists)
@@ -149,7 +152,6 @@ try:
         print(f"[AEGIS ML] Production baseline accuracy: {baseline_accuracy:.2%}")
 except Exception as e:
     print(f"[AEGIS ML] Could not fetch Production baseline: {e}")
-
 # COMMAND ----------
 
 # ── Train ────────────────────────────────────────────────────────────────────
@@ -205,11 +207,10 @@ with mlflow.start_run(run_name=f"aegis_retrain_{TRIGGER}") as run:
         json.dump({"overall_psi": overall_psi, "per_feature": psi_scores}, f, indent=2)
     mlflow.log_artifact(psi_path, "drift_report")
 
-    # Log and register model
+    # Log model (without UC registration due to permission constraints)
     mlflow.sklearn.log_model(
         sk_model=model,
         artifact_path="model",
-        registered_model_name=MODEL_NAME,
         input_example=pd.DataFrame(X_test[:5], columns=feature_cols),
     )
 
