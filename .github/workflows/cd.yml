@@ -56,13 +56,15 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
       - name: Summary
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
           echo "- **Bundle**: aegis-de-project" >> $GITHUB_STEP_SUMMARY
           echo "- **Target**: ${{ steps.target.outputs.target }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ github.event.head_commit.message }}" == *"AEGIS Auto-Fix"* ]]; then
+          if [[ "$COMMIT_MSG" == *"AEGIS Auto-Fix"* ]]; then
             echo "- **Source**: 🛡️ AEGIS Autonomous Notebook Repair" >> $GITHUB_STEP_SUMMARY
           fi
 
