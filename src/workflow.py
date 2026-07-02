@@ -476,25 +476,54 @@ async def fix_in_progress_email_node(state: AEGISState) -> AEGISState:
 async def job_fixer_node(state: AEGISState) -> AEGISState:
     """Fix the failed job with LLM."""
     logger.info("[Workflow] Stage: job_fixer")
-    
+
     from datetime import datetime
     start_time = datetime.utcnow()
-    
+
     agent = JobFixerAgent(state["workspace_host"], state["workspace_token"], state["config"])
     result = await agent.fix_job(
         job_id=int(state["current_job_id"]),
         error_summary=state["current_error_summary"],
         incident_id=state["current_incident_id"],
     )
-    
+
     end_time = datetime.utcnow()
     state["mttr_seconds"] = (end_time - start_time).total_seconds()
-    
+
     state["fix_status"] = result["status"]
     state["fixed_notebooks"] = result["fixed_notebooks"]
     state["post_fix_run_id"] = result["post_fix_run_id"]
     state["current_stage"] = "job_fixed"
-    
+
+    # If fix failed after all retries, send a high-priority escalation email immediately.
+    # The notebook has already been rolled back to original by JobFixerAgent at this point.
+    if result["status"] != "success":
+        logger.error(
+            f"[Workflow] ❌ Fix failed after max retries for incident {state['current_incident_id']}. "
+            f"Notebook rolled back to original. Sending high-priority escalation."
+        )
+        AuditLog.record(
+            "FIX_ESCALATED",
+            incident_id=state["current_incident_id"],
+            job_id=state["current_job_id"],
+            reason=result.get("outcome", "Max retries exceeded"),
+        )
+        _mail = MailSenderAgent()
+        await _mail.send_stage("escalation", {
+            "incident_id": state["current_incident_id"],
+            "job_name": state["current_job_name"],
+            "confidence": state.get("rca_confidence", 0),
+            "root_cause": state.get("root_cause", "Unknown"),
+            "threshold": RCA_CONFIDENCE_THRESHOLD,
+            "reason": (
+                f"AUTONOMOUS FIX FAILED — all 3 repair attempts exhausted. "
+                f"Notebook has been rolled back to its original version. "
+                f"Last error: {result.get('outcome', 'See audit log for details')}. "
+                f"IMMEDIATE human intervention required."
+            ),
+        })
+        state["emails_sent"].append("escalation_max_retries")
+
     return state
 
 
