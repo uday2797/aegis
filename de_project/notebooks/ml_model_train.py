@@ -134,7 +134,8 @@ print(f"[AEGIS ML] Train={len(X_train):,} | Test={len(X_test):,}")
 
 # ── MLflow experiment setup ──────────────────────────────────────────────────
 
-EXPERIMENT_NAME = f"/AEGIS/{MODEL_NAME}"
+current_user = spark.sql("SELECT current_user()").collect()[0][0]
+EXPERIMENT_NAME = f"/Users/{current_user}/AEGIS/{MODEL_NAME}"
 mlflow.set_experiment(EXPERIMENT_NAME)
 
 # Fetch baseline accuracy from the current Production model (if exists)
