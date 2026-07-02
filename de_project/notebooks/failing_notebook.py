@@ -24,7 +24,7 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, I
 spark = SparkSession.builder.getOrCreate()
 
 RUN_DATE         = datetime.now().strftime("%Y-%m-%d")
-OUTPUT_TABLE     = "aegis.quality_reports"
+OUTPUT_TABLE     = "workspace.default.quality_reports"
 ALERT_NULL_RATE  = 0.05
 EXPECTED_REGIONS = ["North", "South", "East", "West"]
 
