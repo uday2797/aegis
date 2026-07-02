@@ -24,7 +24,7 @@ from rich.panel import Panel
 from src.workflow import build_aegis_workflow
 
 load_dotenv()
-console = Console()
+console = Console(force_terminal=True, highlight=False)
 
 
 def load_config(path: str = "config/config.yaml") -> dict:

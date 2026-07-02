@@ -1,7 +1,7 @@
 resources:
   jobs:
     aegis_failing_job:
-      name: "[AEGIS Test] Data Quality Validation - Failing"
+      name: "[AEGIS Test] Data Quality Validation"
       description: "Standalone job with intentional bugs for AEGIS RCA and auto-healing demonstration"
 
       tags:
