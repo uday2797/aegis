@@ -5,10 +5,11 @@
 **Hackathon:** AI-Autonomous Reliability Engineer | Data DevOps & MLOps Track  
 **Theme:** Self-Healing Data & ML Systems
 
-[![Tests](https://img.shields.io/badge/tests-94%20passed-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-103%20passed-brightgreen)](#testing)
 [![Guardrails](https://img.shields.io/badge/guardrails-7%20layers-blue)](#guardrails--safety-layers)
 [![LLM](https://img.shields.io/badge/LLM-GPT--5.5%20%7C%20GPT--4o-orange)](#ai-tools-used)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](#setup)
+[![Dashboard](https://img.shields.io/badge/dashboard-Streamlit-ff4b4b)](#aegis-command-center-dashboard)
 
 ---
 
@@ -428,6 +429,37 @@ To show both the DE and ML paths in a single video:
 3. AEGIS detects `sales_forecast_v3` degradation → emails drift alert → triggers `[AEGIS ML] Model Retraining Pipeline` → polls until complete → compares accuracy in MLflow → promotes to Production → sends healing complete email
 
 > The two paths are mutually exclusive per run — `route_after_initial_email` routes to either DE or ML, never both. Show them in separate video segments.
+
+**After either run — open the dashboard:**
+
+```bash
+streamlit run demo/dashboard.py
+```
+
+The dashboard loads the real audit log and shows the KPI cards, incident timeline, LangGraph diagram, and live audit feed — making the full autonomous healing story visual and judge-friendly.
+
+---
+
+## AEGIS Command Center Dashboard
+
+A production-quality Streamlit dashboard ships alongside the core engine. Run it against the live audit log to see every healing action visualized in real time.
+
+```bash
+# From the project root (after running AEGIS at least once to populate the audit log):
+streamlit run demo/dashboard.py
+# → opens http://localhost:8501
+```
+
+### What the dashboard shows
+
+| Tab | Content |
+|---|---|
+| **📊 Overview** | KPI cards (incidents, heal rate, avg MTTR, LLM calls, guardrail fires) · Incident timeline · MTTR vs manual baseline comparison · Lines-changed per fix · RCA confidence scatter |
+| **🔍 Incident Intelligence** | Full incident table · Deep-dive per incident (step-by-step audit trail, fix attempt chart, root cause card) · Gantt chart (detection → resolution) |
+| **⚙️ Live Pipeline** | Interactive Mermaid diagram of the full 15-node LangGraph state machine · Node descriptions with color-coded layers · 7 guardrail layer reference |
+| **🔒 Guardrail Console** | Live audit log feed (filterable by incident + action) · Guardrail activation bar chart · System architecture reference |
+
+The dashboard reads directly from `data/audit_log.jsonl` and auto-refreshes every 15 seconds when the sidebar toggle is enabled — useful for watching a live AEGIS run.
 
 ---
 
