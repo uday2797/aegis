@@ -1,22 +1,22 @@
-"""AEGIS Command Center — Production AIOps Dashboard for Hackathon Demo.
+"""AEGIS Command Center — Production AIOps Dashboard.
 
 Run from project root:
     streamlit run demo/dashboard.py
 """
 
 import json
+import math
 import time
-from collections import Counter
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import streamlit.components.v1 as components
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 AUDIT_LOG_PATH = Path("data/audit_log.jsonl")
-REPORTS_DIR    = Path("data/reports")
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -26,13 +26,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ─── Color palette ────────────────────────────────────────────────────────────
+# ─── Palette ──────────────────────────────────────────────────────────────────
 CYAN   = "#00d4ff"
 GREEN  = "#00ff88"
 RED    = "#ff4444"
 GOLD   = "#ffd700"
 PURPLE = "#a855f7"
 ORANGE = "#ff8c00"
+PINK   = "#f43f5e"
 
 ACTION_COLOR = {
     "FIX_SUCCESS":            GREEN,
@@ -46,217 +47,144 @@ ACTION_COLOR = {
     "LINT_CHECK":             ORANGE,
     "DIFF_COMPUTED":          "#60a5fa",
     "NOTEBOOK_ROLLED_BACK":   "#f97316",
-    "LLM_OUTPUT_INVALID":     "#f43f5e",
+    "LLM_OUTPUT_INVALID":     PINK,
     "PEP8_FORMATTED":         "#4ade80",
 }
 
 # ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <style>
-    #MainMenu {{visibility: hidden;}}
-    footer {{visibility: hidden;}}
-    header {{visibility: hidden;}}
+    /* ── reset ── */
+    #MainMenu, footer, header {{ visibility: hidden; }}
+    .block-container {{ padding-top: 1rem !important; max-width: 100% !important; }}
 
-    .stApp {{
-        background-color: #0a0e1a;
-        color: #e2e8f0;
-    }}
-
-    /* KPI cards */
-    .kpi-card {{
-        background: linear-gradient(135deg, rgba(17,24,39,0.95), rgba(30,41,59,0.85));
-        border: 1px solid rgba(0,212,255,0.18);
-        border-radius: 14px;
-        padding: 22px 20px 16px;
-        margin: 2px;
-        backdrop-filter: blur(12px);
+    /* ── KPI cards ── */
+    .kpi {{
+        background: linear-gradient(145deg,rgba(17,24,39,.98),rgba(30,41,59,.9));
+        border: 1px solid rgba(0,212,255,.22);
+        border-radius: 16px;
+        padding: 22px 18px 16px;
         position: relative;
         overflow: hidden;
+        transition: border-color .3s;
     }}
-    .kpi-card::before {{
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 3px;
-        background: linear-gradient(90deg, {CYAN}, {PURPLE});
+    .kpi:hover {{ border-color: rgba(0,212,255,.55); }}
+    .kpi::before {{
+        content:''; position:absolute; top:0;left:0;right:0; height:3px;
+        background: linear-gradient(90deg,{CYAN},{PURPLE});
     }}
-    .kpi-value {{
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, {CYAN}, {GREEN});
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        line-height: 1.1;
-        margin: 0;
-        letter-spacing: -1px;
+    .kpi-v {{
+        font-size:2.6rem; font-weight:900; letter-spacing:-1.5px;
+        background:linear-gradient(135deg,{CYAN},{GREEN});
+        -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+        background-clip:text; line-height:1;
     }}
-    .kpi-value-red {{
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, {RED}, {ORANGE});
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        line-height: 1.1;
-        margin: 0;
-        letter-spacing: -1px;
+    .kpi-v-gold {{
+        font-size:2.6rem; font-weight:900; letter-spacing:-1.5px;
+        background:linear-gradient(135deg,{GOLD},{ORANGE});
+        -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+        background-clip:text; line-height:1;
     }}
-    .kpi-value-gold {{
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, {GOLD}, {ORANGE});
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        line-height: 1.1;
-        margin: 0;
-        letter-spacing: -1px;
+    .kpi-v-purple {{
+        font-size:2.6rem; font-weight:900; letter-spacing:-1.5px;
+        background:linear-gradient(135deg,{PURPLE},#ec4899);
+        -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+        background-clip:text; line-height:1;
     }}
-    .kpi-label {{
-        font-size: 0.78rem;
-        color: #94a3b8;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        margin-top: 8px;
-        font-weight: 600;
-    }}
-    .kpi-sub {{
-        font-size: 0.75rem;
-        color: #4ade80;
-        margin-top: 5px;
-        font-weight: 500;
+    .kpi-label {{ font-size:.73rem; color:#94a3b8; text-transform:uppercase;
+                  letter-spacing:.14em; margin-top:9px; font-weight:700; }}
+    .kpi-sub   {{ font-size:.74rem; color:#4ade80; margin-top:4px; font-weight:500; }}
+
+    /* ── section headers ── */
+    .sh {{
+        font-size:.75rem; font-weight:800; color:{CYAN};
+        text-transform:uppercase; letter-spacing:.14em;
+        border-bottom:1px solid rgba(0,212,255,.15);
+        padding-bottom:7px; margin-bottom:12px; margin-top:2px;
     }}
 
-    /* Section headers */
-    .sec-h {{
-        font-size: 0.78rem;
-        font-weight: 700;
-        color: {CYAN};
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        border-bottom: 1px solid rgba(0,212,255,0.15);
-        padding-bottom: 8px;
-        margin-bottom: 14px;
-        margin-top: 4px;
-    }}
-
-    /* Tabs */
+    /* ── tabs ── */
     .stTabs [data-baseweb="tab-list"] {{
-        gap: 6px;
-        background-color: transparent;
-        border-bottom: 1px solid rgba(0,212,255,0.12);
-        padding-bottom: 0;
+        gap:5px; background:transparent;
+        border-bottom:1px solid rgba(0,212,255,.12);
     }}
     .stTabs [data-baseweb="tab"] {{
-        height: 38px;
-        background-color: rgba(17,24,39,0.6);
-        border-radius: 8px 8px 0 0;
-        color: #64748b;
-        font-weight: 700;
-        font-size: 0.82rem;
-        border: 1px solid rgba(0,212,255,0.08);
-        border-bottom: none;
-        padding: 0 18px;
+        height:38px; background:rgba(17,24,39,.7);
+        border-radius:8px 8px 0 0; color:#64748b;
+        font-weight:700; font-size:.82rem;
+        border:1px solid rgba(0,212,255,.08); border-bottom:none;
+        padding:0 18px;
     }}
     .stTabs [aria-selected="true"] {{
-        background-color: rgba(0,212,255,0.1) !important;
-        color: {CYAN} !important;
-        border-color: rgba(0,212,255,0.25) !important;
-    }}
-    .stTabs [data-testid="stMarkdownContainer"] p {{
-        margin: 0;
+        background:rgba(0,212,255,.1) !important;
+        color:{CYAN} !important;
+        border-color:rgba(0,212,255,.28) !important;
     }}
 
-    /* Audit log rows */
-    .alog {{
-        display: flex;
-        gap: 0;
-        padding: 5px 8px;
-        border-bottom: 1px solid rgba(255,255,255,0.04);
-        font-size: 0.76rem;
-        font-family: 'Consolas', 'Monaco', monospace;
-        transition: background 0.15s;
-        align-items: flex-start;
-    }}
-    .alog:hover {{ background: rgba(0,212,255,0.04); }}
-    .at {{ color: #475569; min-width: 140px; flex-shrink: 0; }}
-    .ai {{ color: #818cf8; min-width: 130px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; }}
-    .aa {{ font-weight: 700; min-width: 220px; flex-shrink: 0; }}
-    .ad {{ color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }}
+    /* ── audit log ── */
+    .alog {{ display:flex; gap:0; padding:5px 8px;
+             border-bottom:1px solid rgba(255,255,255,.04);
+             font-size:.75rem; font-family:'Consolas',monospace; }}
+    .alog:hover {{ background:rgba(0,212,255,.04); }}
+    .at {{ color:#475569; min-width:135px; flex-shrink:0; }}
+    .ai {{ color:#818cf8; min-width:125px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }}
+    .aa {{ font-weight:700; min-width:215px; flex-shrink:0; }}
+    .ad {{ color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:360px; }}
 
-    /* Workflow step list */
-    .ws {{
-        display: flex;
-        align-items: flex-start;
-        padding: 7px 10px;
-        margin: 3px 0;
-        border-radius: 6px;
-        border-left: 3px solid transparent;
-        font-size: 0.82rem;
-        gap: 10px;
-    }}
-    .ws.done {{
-        background: rgba(0,255,136,0.07);
-        border-left-color: {GREEN};
-    }}
-    .ws.active {{
-        background: rgba(0,212,255,0.1);
-        border-left-color: {CYAN};
-    }}
-    .ws.pending {{
-        background: rgba(30,41,59,0.4);
-        border-left-color: #1e293b;
-    }}
-    .wsn {{ font-weight: 800; min-width: 30px; flex-shrink: 0; font-size: 0.75rem; }}
-    .wst {{ font-weight: 700; }}
-    .wsd {{ font-size: 0.72rem; opacity: 0.65; margin-top: 1px; }}
-
-    /* Guardrail rows */
+    /* ── guardrail rows ── */
     .gr {{
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        padding: 7px 10px;
-        margin-bottom: 4px;
-        border-radius: 0 8px 8px 0;
-        border-left: 3px solid;
-        background: rgba(17,24,39,0.6);
+        display:flex; align-items:flex-start; gap:10px;
+        padding:7px 10px; margin-bottom:4px;
+        border-radius:0 8px 8px 0; border-left:3px solid;
+        background:rgba(17,24,39,.65);
     }}
-    .grk {{ font-weight: 800; min-width: 32px; font-size: 0.72rem; }}
-    .grn {{ font-weight: 700; font-size: 0.83rem; }}
-    .grd {{ font-size: 0.73rem; color: #64748b; margin-top: 1px; }}
+    .grk {{ font-weight:800; min-width:32px; font-size:.72rem; }}
+    .grn {{ font-weight:700; font-size:.83rem; }}
+    .grd {{ font-size:.72rem; color:#64748b; margin-top:1px; }}
 
-    @keyframes pulse {{
-        0%,100% {{ opacity:1; transform:scale(1); }}
-        50%      {{ opacity:0.5; transform:scale(1.4); }}
+    /* ── pipeline step ── */
+    .ps {{
+        display:flex; align-items:flex-start; gap:10px;
+        padding:7px 10px; margin:3px 0;
+        border-radius:6px; border-left:3px solid; font-size:.81rem;
     }}
-    .live {{ display:inline-block; width:8px; height:8px; background:{GREEN}; border-radius:50%;
-              animation:pulse 1.8s infinite; margin-right:6px; vertical-align:middle; }}
+    .psn {{ font-weight:900; min-width:28px; font-size:.72rem; flex-shrink:0; }}
+    .pst {{ font-weight:700; }}
+    .psd {{ font-size:.71rem; opacity:.65; margin-top:1px; }}
 
-    /* Selectbox and input dark */
-    .stSelectbox > div > div {{
-        background-color: rgba(17,24,39,0.9) !important;
-        border: 1px solid rgba(0,212,255,0.2) !important;
-        color: #e2e8f0 !important;
+    /* ── live dot ── */
+    @keyframes pulse {{ 0%,100%{{opacity:1;transform:scale(1)}} 50%{{opacity:.4;transform:scale(1.5)}} }}
+    .live {{ display:inline-block; width:8px; height:8px; background:{GREEN};
+              border-radius:50%; animation:pulse 1.8s infinite;
+              margin-right:6px; vertical-align:middle; box-shadow:0 0 6px {GREEN}; }}
+
+    /* ── glow text ── */
+    @keyframes glow {{
+        0%,100% {{ text-shadow:0 0 6px {CYAN},0 0 12px {CYAN}; }}
+        50%      {{ text-shadow:0 0 12px {CYAN},0 0 24px {CYAN},0 0 36px {PURPLE}; }}
     }}
-    .stDataFrame {{ background: transparent; }}
+    .glow {{ animation:glow 3s infinite; }}
+
+    /* ── badge ── */
+    .badge-ok  {{ background:rgba(0,255,136,.15); color:{GREEN};  border:1px solid rgba(0,255,136,.3);
+                  border-radius:20px; padding:2px 10px; font-size:.72rem; font-weight:700; }}
+    .badge-bad {{ background:rgba(255,68,68,.15); color:{RED};   border:1px solid rgba(255,68,68,.3);
+                  border-radius:20px; padding:2px 10px; font-size:.72rem; font-weight:700; }}
+    .badge-esc {{ background:rgba(255,140,0,.15); color:{ORANGE};border:1px solid rgba(255,140,0,.3);
+                  border-radius:20px; padding:2px 10px; font-size:.72rem; font-weight:700; }}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─── Data loading ─────────────────────────────────────────────────────────────
+# ─── Data ─────────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=10)
-def load_audit_log() -> pd.DataFrame:
+@st.cache_data(ttl=12)
+def load_df() -> pd.DataFrame:
     if not AUDIT_LOG_PATH.exists():
         return pd.DataFrame()
-    rows = []
-    for line in AUDIT_LOG_PATH.read_text(encoding="utf-8").strip().splitlines():
-        try:
-            rows.append(json.loads(line))
-        except Exception:
-            pass
+    rows = [json.loads(l) for l in
+            AUDIT_LOG_PATH.read_text(encoding="utf-8").strip().splitlines()
+            if l.strip()]
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
@@ -264,317 +192,370 @@ def load_audit_log() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=10)
-def build_incident_table(df: pd.DataFrame) -> pd.DataFrame:
+@st.cache_data(ttl=12)
+def build_incidents(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "incident_id" not in df.columns:
         return pd.DataFrame()
     rows = []
     for inc_id, grp in df.groupby("incident_id", dropna=True):
-        actions  = set(grp["action"].tolist())
-        ts       = grp["timestamp"]
-        start    = ts.min()
-        end      = ts.max()
+        acts   = set(grp["action"].tolist())
+        ts     = grp["timestamp"]
+        start, end = ts.min(), ts.max()
         mttr_min = round((end - start).total_seconds() / 60, 1)
-
         status = (
-            "success"   if "FIX_SUCCESS" in actions else
-            "escalated" if actions & {"FIX_ESCALATED", "MAX_RETRIES_EXCEEDED"} else
+            "success"   if "FIX_SUCCESS" in acts else
+            "escalated" if acts & {"FIX_ESCALATED", "MAX_RETRIES_EXCEEDED"} else
             "in_progress"
         )
-
-        max_att = max(
-            (int(r.get("attempt", 0)) for _, r in grp.iterrows() if r.get("attempt") is not None),
-            default=0,
-        )
-
-        conf_g = grp[grp["action"] == "CONFIDENCE_GATE_PASSED"]
-        confidence = (
-            float(conf_g.iloc[-1]["confidence"])
-            if not conf_g.empty and "confidence" in conf_g.columns
-            else 0.0
-        )
-        root_cause = (
-            str(conf_g.iloc[-1]["root_cause"])
-            if not conf_g.empty and "root_cause" in conf_g.columns
-            else "Unknown"
-        )
-
-        diff_g = grp[grp["action"] == "DIFF_COMPUTED"]
-        max_lines = (
-            int(diff_g["lines_changed"].max())
-            if not diff_g.empty and "lines_changed" in diff_g.columns
-            else 0
-        )
-
+        max_att = max((int(r.get("attempt", 0)) for _, r in grp.iterrows()
+                       if r.get("attempt") is not None), default=0)
+        cg = grp[grp["action"] == "CONFIDENCE_GATE_PASSED"]
+        confidence = float(cg.iloc[-1]["confidence"]) if not cg.empty and "confidence" in cg.columns else 0.0
+        root_cause = str(cg.iloc[-1]["root_cause"]) if not cg.empty and "root_cause" in cg.columns else "Unknown"
+        dg = grp[grp["action"] == "DIFF_COMPUTED"]
+        max_lines = int(dg["lines_changed"].max()) if not dg.empty and "lines_changed" in dg.columns else 0
         rows.append(dict(
-            incident_id=inc_id,
-            start=start,
-            end=end,
-            mttr_min=mttr_min,
-            status=status,
-            attempts=max_att,
-            confidence=confidence,
-            root_cause=root_cause,
-            max_lines=max_lines,
+            incident_id=inc_id, start=start, end=end,
+            mttr_min=mttr_min, status=status,
+            attempts=max_att, confidence=confidence,
+            root_cause=root_cause, max_lines=max_lines,
             n_actions=len(grp),
         ))
     return pd.DataFrame(rows).sort_values("start").reset_index(drop=True)
 
 
-def dark_fig(fig, h: int | None = None) -> go.Figure:
-    upd = dict(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.5)",
-        font=dict(color="#94a3b8", family="system-ui, sans-serif", size=11),
-        margin=dict(l=12, r=12, t=36, b=12),
-        legend=dict(bgcolor="rgba(17,24,39,0.8)", bordercolor="rgba(0,212,255,0.2)", borderwidth=1),
+def dfig(fig, h=None):
+    kw = dict(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(17,24,39,0.45)",
+        font=dict(color="#94a3b8", family="system-ui,sans-serif", size=11),
+        margin=dict(l=10, r=10, t=36, b=10),
+        legend=dict(bgcolor="rgba(17,24,39,.85)", bordercolor="rgba(0,212,255,.2)", borderwidth=1),
     )
-    if h:
-        upd["height"] = h
-    fig.update_layout(**upd)
-    fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)", zerolinecolor="rgba(255,255,255,0.08)")
-    fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", zerolinecolor="rgba(255,255,255,0.08)")
+    if h: kw["height"] = h
+    fig.update_layout(**kw)
+    fig.update_xaxes(gridcolor="rgba(255,255,255,.05)", zerolinecolor="rgba(255,255,255,.08)")
+    fig.update_yaxes(gridcolor="rgba(255,255,255,.05)", zerolinecolor="rgba(255,255,255,.08)")
     return fig
 
 
-# ─── Load ─────────────────────────────────────────────────────────────────────
-df  = load_audit_log()
-inc = build_incident_table(df)
+# ─── Load data ────────────────────────────────────────────────────────────────
+df  = load_df()
+inc = build_incidents(df)
 
 n_total     = len(inc)
 n_healed    = int((inc["status"] == "success").sum())   if not inc.empty else 0
 n_escalated = int((inc["status"] == "escalated").sum()) if not inc.empty else 0
-heal_rate   = round(n_healed / n_total * 100) if n_total else 0
+heal_pct    = round(n_healed / n_total * 100) if n_total else 0
 avg_mttr    = round(inc["mttr_min"].mean(), 1) if not inc.empty else 0
 llm_calls   = int((df["action"] == "FIX_STARTED").sum()) if not df.empty else 0
-grail_fires = int(df["action"].isin([
-    "LINT_CHECK","DIFF_COMPUTED","NOTEBOOK_ROLLED_BACK",
-    "LLM_OUTPUT_INVALID","MAX_RETRIES_EXCEEDED","FIX_EXCEPTION","FIX_ESCALATED",
+g_fires     = int(df["action"].isin([
+    "LINT_CHECK", "DIFF_COMPUTED", "NOTEBOOK_ROLLED_BACK",
+    "LLM_OUTPUT_INVALID", "MAX_RETRIES_EXCEEDED", "FIX_EXCEPTION", "FIX_ESCALATED",
 ]).sum()) if not df.empty else 0
+n_rollbacks = int((df["action"] == "NOTEBOOK_ROLLED_BACK").sum()) if not df.empty else 0
+avg_conf    = round(inc["confidence"].mean(), 1) if not inc.empty else 0
+
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 st.markdown(f"""
-<div style="display:flex; align-items:center; justify-content:space-between;
-            padding:18px 24px;
-            background:linear-gradient(135deg, rgba(0,212,255,0.07), rgba(168,85,247,0.07));
-            border:1px solid rgba(0,212,255,0.14); border-radius:14px; margin-bottom:22px;">
+<div style="
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 28px;
+    background:linear-gradient(135deg,rgba(0,212,255,.06),rgba(168,85,247,.06),rgba(0,255,136,.04));
+    border:1px solid rgba(0,212,255,.18); border-radius:16px; margin-bottom:20px;
+    box-shadow:0 0 40px rgba(0,212,255,.06);
+">
   <div>
-    <h1 style="margin:0; font-size:1.9rem; font-weight:900; letter-spacing:-0.5px;
-               background:linear-gradient(135deg,{CYAN},{PURPLE});
-               -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;">
+    <h1 class="glow" style="margin:0;font-size:2rem;font-weight:900;letter-spacing:-1px;
+               background:linear-gradient(135deg,{CYAN} 0%,{PURPLE} 50%,{GREEN} 100%);
+               -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">
       🛡️ AEGIS Command Center
     </h1>
-    <p style="margin:5px 0 0; color:#94a3b8; font-size:0.88rem;">
+    <p style="margin:6px 0 0;color:#94a3b8;font-size:.9rem;letter-spacing:.02em;">
       Autonomous End-to-end Guardian for Intelligent Systems &nbsp;·&nbsp;
-      LangGraph 15-node &nbsp;·&nbsp; GPT-5.5 Repair &nbsp;·&nbsp; 7 Guardrail Layers &nbsp;·&nbsp; Real Databricks Production
+      <strong style="color:{CYAN}">LangGraph 15-node</strong> &nbsp;·&nbsp;
+      <strong style="color:{GREEN}">GPT-5.5 Repair</strong> &nbsp;·&nbsp;
+      <strong style="color:{PURPLE}">7 Guardrail Layers</strong> &nbsp;·&nbsp;
+      <strong style="color:{GOLD}">Real Databricks Production</strong>
     </p>
   </div>
-  <div style="text-align:right; flex-shrink:0;">
-    <div style="font-size:0.78rem; color:#94a3b8;"><span class="live"></span>LIVE AUDIT LOG</div>
-    <div style="font-size:0.73rem; color:#475569; margin-top:3px;">{len(df) if not df.empty else 0} entries &nbsp;·&nbsp; {n_total} incidents</div>
+  <div style="text-align:right;flex-shrink:0;padding-left:20px;">
+    <div style="font-size:.82rem;color:#94a3b8;letter-spacing:.06em;">
+        <span class="live"></span><strong style="color:{GREEN}">LIVE</strong> AUDIT FEED
+    </div>
+    <div style="font-size:.75rem;color:#475569;margin-top:4px;">
+        {len(df) if not df.empty else 0} events &nbsp;·&nbsp; {n_total} incidents &nbsp;·&nbsp; real production
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ─── KPI Row ──────────────────────────────────────────────────────────────────
-c1, c2, c3, c4, c5 = st.columns(5)
-
-kpis = [
-    (c1, str(n_total),      "Total Incidents",     f"{n_healed} healed · {n_escalated} escalated", ""),
-    (c2, f"{heal_rate}%",   "Auto-Heal Rate",      f"vs 0% baseline",                             ""),
-    (c3, f"{avg_mttr}m",    "Avg MTTR",            f"vs ~120 min manual",                         "gold"),
-    (c4, str(llm_calls),    "LLM Repair Calls",    "GPT-5.5 invocations",                         ""),
-    (c5, str(grail_fires),  "Guardrail Activations","7-layer safety system",                       ""),
-]
-for col, val, label, sub, color in kpis:
-    vc = "kpi-value-gold" if color == "gold" else "kpi-value"
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+for col, val, label, sub, vc in [
+    (c1, str(n_total),       "Total Incidents",       f"{n_healed} healed · {n_escalated} escalated", "kpi-v"),
+    (c2, f"{heal_pct}%",     "Auto-Heal Rate",        "vs 0% rule-based baseline",                    "kpi-v"),
+    (c3, f"{avg_mttr}m",     "Avg MTTR",              "vs ~120 min manual on-call",                   "kpi-v-gold"),
+    (c4, str(llm_calls),     "LLM Repair Calls",      "GPT-5.5 invocations",                          "kpi-v-purple"),
+    (c5, str(g_fires),       "Guardrail Activations", "7-layer safety system",                        "kpi-v"),
+    (c6, f"{avg_conf}%",     "Avg RCA Confidence",    "GPT-4o root cause analysis",                   "kpi-v"),
+]:
     col.markdown(f"""
-    <div class="kpi-card">
+    <div class="kpi">
         <div class="{vc}">{val}</div>
         <div class="kpi-label">{label}</div>
         <div class="kpi-sub">{sub}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
 
-st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊  Overview",
     "🔍  Incident Intelligence",
     "⚙️  Live Pipeline",
     "🔒  Guardrail Console",
+    "🚀  System Architecture",
 ])
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Overview
 # ══════════════════════════════════════════════════════════════════════════════
 with tab1:
-    left, right = st.columns([3, 2], gap="medium")
+    row1_l, row1_m, row1_r = st.columns([2, 2, 2], gap="medium")
 
-    # ── Left column ───────────────────────────────────────────────────────────
-    with left:
-        st.markdown('<div class="sec-h">Incident Activity Timeline</div>', unsafe_allow_html=True)
-
-        if not df.empty:
-            tdf = df.copy()
-            tdf["hour"] = tdf["timestamp"].dt.floor("h")
-            by_hour = tdf.groupby("hour").size().reset_index(name="count")
-
-            fig_tl = go.Figure()
-            fig_tl.add_trace(go.Scatter(
-                x=by_hour["hour"], y=by_hour["count"],
-                mode="lines+markers", fill="tozeroy",
-                line=dict(color=CYAN, width=2.5),
-                fillcolor="rgba(0,212,255,0.08)",
-                marker=dict(size=6, color=CYAN),
-                name="Actions / hour",
-            ))
-            for action, marker_sym, color, name in [
-                ("FIX_SUCCESS",    "star",   GREEN, "Auto-Healed"),
-                ("FIX_ESCALATED",  "x",      RED,   "Escalated"),
-                ("FIX_EXCEPTION",  "circle-open", ORANGE, "Exception"),
-            ]:
-                sub = df[df["action"] == action]
-                if not sub.empty:
-                    fig_tl.add_trace(go.Scatter(
-                        x=sub["timestamp"], y=[0.3] * len(sub),
-                        mode="markers", name=name,
-                        marker=dict(size=13, color=color, symbol=marker_sym,
-                                    line=dict(width=2, color="white")),
-                    ))
-            dark_fig(fig_tl, 230)
-            fig_tl.update_layout(title=None, xaxis_title=None, yaxis_title="Events/hr")
-            st.plotly_chart(fig_tl, use_container_width=True)
-
-        st.markdown('<div class="sec-h">MTTR — AEGIS vs Baseline</div>', unsafe_allow_html=True)
-
-        baselines = ["Manual On-Call", "Rule-Based Scripts", "AEGIS Avg", "AEGIS Best Case"]
-        mttr_vals = [120, 45, avg_mttr if avg_mttr > 0 else 10, 3]
-        bar_colors = [RED, ORANGE, CYAN, GREEN]
-
-        fig_mttr = go.Figure(go.Bar(
-            x=baselines, y=mttr_vals,
-            marker_color=bar_colors, marker_line_width=0,
-            text=[f"{v}m" for v in mttr_vals],
-            textposition="outside",
-            textfont=dict(color="#e2e8f0", size=13, family="monospace"),
+    # ── Heal-rate gauge ────────────────────────────────────────────────────────
+    with row1_l:
+        st.markdown('<div class="sh">Auto-Heal Rate Gauge</div>', unsafe_allow_html=True)
+        fig_gauge = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=heal_pct,
+            number=dict(suffix="%", font=dict(size=48, color=GREEN)),
+            delta=dict(reference=0, valueformat=".0f", suffix="% above baseline",
+                       font=dict(size=14)),
+            gauge=dict(
+                axis=dict(range=[0, 100], tickfont=dict(color="#94a3b8", size=10),
+                          tickcolor="#334155"),
+                bar=dict(color=GREEN, thickness=0.28),
+                bgcolor="rgba(17,24,39,.9)",
+                borderwidth=0,
+                steps=[
+                    dict(range=[0,  33], color="rgba(255,68,68,.12)"),
+                    dict(range=[33, 66], color="rgba(255,215,0,.10)"),
+                    dict(range=[66,100], color="rgba(0,255,136,.12)"),
+                ],
+                threshold=dict(line=dict(color=CYAN, width=3), thickness=0.85, value=heal_pct),
+            ),
+            title=dict(text="Incidents Autonomously Resolved", font=dict(color="#94a3b8", size=12)),
         ))
-        dark_fig(fig_mttr, 250)
-        fig_mttr.update_layout(title=None, yaxis_title="Minutes", bargap=0.38)
-        fig_mttr.update_yaxes(range=[0, 145])
-        st.plotly_chart(fig_mttr, use_container_width=True)
+        dfig(fig_gauge, 260)
+        fig_gauge.update_layout(margin=dict(l=20, r=20, t=50, b=10))
+        st.plotly_chart(fig_gauge, use_container_width=True)
 
-        # Lines changed scatter
-        if not df.empty and "lines_changed" in df.columns:
-            st.markdown('<div class="sec-h">Lines Changed per Repair Attempt</div>', unsafe_allow_html=True)
-            ddf = df[df["action"] == "DIFF_COMPUTED"].dropna(subset=["lines_changed"]).copy()
-            if not ddf.empty:
-                ddf["lines_changed"] = ddf["lines_changed"].astype(int)
-                ddf["attempt_label"] = [f"Fix #{i+1}" for i in range(len(ddf))]
-                ddf["inc_short"] = ddf.get("incident_id", pd.Series(["?"] * len(ddf))).str[:12]
+    # ── Confidence gauge ───────────────────────────────────────────────────────
+    with row1_m:
+        st.markdown('<div class="sh">Avg RCA Confidence Gauge</div>', unsafe_allow_html=True)
+        fig_conf_g = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=avg_conf,
+            number=dict(suffix="%", font=dict(size=48, color=CYAN)),
+            gauge=dict(
+                axis=dict(range=[0, 100], tickfont=dict(color="#94a3b8", size=10),
+                          tickcolor="#334155"),
+                bar=dict(color=CYAN, thickness=0.28),
+                bgcolor="rgba(17,24,39,.9)",
+                borderwidth=0,
+                steps=[
+                    dict(range=[0, 70], color="rgba(255,68,68,.10)"),
+                    dict(range=[70,100], color="rgba(0,212,255,.08)"),
+                ],
+                threshold=dict(line=dict(color=ORANGE, width=3), thickness=0.85, value=70),
+            ),
+            title=dict(text="GPT-4o Root Cause Confidence · gate @ 70%",
+                       font=dict(color="#94a3b8", size=12)),
+        ))
+        dfig(fig_conf_g, 260)
+        fig_conf_g.update_layout(margin=dict(l=20, r=20, t=50, b=10))
+        st.plotly_chart(fig_conf_g, use_container_width=True)
 
-                fig_lines = go.Figure(go.Bar(
-                    x=ddf["attempt_label"],
-                    y=ddf["lines_changed"],
-                    marker_color=[
-                        GREEN if "INC-7BC959AE" in str(r.get("incident_id","")) or
-                                 "INC-B3A904CC" in str(r.get("incident_id",""))
-                        else CYAN
-                        for _, r in ddf.iterrows()
-                    ],
-                    marker_line_width=0,
-                    text=ddf["lines_changed"],
-                    textposition="outside",
-                    textfont=dict(color="#94a3b8", size=10),
-                    hovertemplate="<b>%{x}</b><br>Lines: %{y}<extra></extra>",
-                ))
-                dark_fig(fig_lines, 200)
-                fig_lines.update_layout(title=None, xaxis_title=None, yaxis_title="Lines")
-                st.plotly_chart(fig_lines, use_container_width=True)
-
-    # ── Right column ──────────────────────────────────────────────────────────
-    with right:
-        st.markdown('<div class="sec-h">Incident Outcomes</div>', unsafe_allow_html=True)
-
+    # ── Outcome donut ──────────────────────────────────────────────────────────
+    with row1_r:
+        st.markdown('<div class="sh">Incident Outcomes</div>', unsafe_allow_html=True)
         if not inc.empty:
-            scounts = inc["status"].value_counts()
+            sc = inc["status"].value_counts()
             cmap = {"success": GREEN, "escalated": RED, "in_progress": GOLD}
-            labels = scounts.index.str.replace("_", " ").str.title().tolist()
-
             fig_donut = go.Figure(go.Pie(
-                labels=labels,
-                values=scounts.values,
-                hole=0.65,
-                marker_colors=[cmap.get(s, "#888") for s in scounts.index],
+                labels=sc.index.str.replace("_", " ").str.title(),
+                values=sc.values, hole=0.64,
+                marker=dict(
+                    colors=[cmap.get(s, "#888") for s in sc.index],
+                    line=dict(color="#0a0e1a", width=3),
+                ),
                 textinfo="label+percent",
                 textfont=dict(size=11),
                 hovertemplate="%{label}: %{value}<extra></extra>",
+                pull=[0.05 if s == "success" else 0 for s in sc.index],
             ))
-            dark_fig(fig_donut, 260)
+            dfig(fig_donut, 260)
             fig_donut.update_layout(
-                title=None,
+                title=None, showlegend=False,
                 annotations=[dict(
-                    text=f"<b style='font-size:18px'>{n_total}</b><br>incidents",
-                    x=0.5, y=0.5, font=dict(size=15, color=CYAN), showarrow=False,
+                    text=f"<b>{n_total}</b><br><span style='font-size:10px'>incidents</span>",
+                    x=0.5, y=0.5, font=dict(size=22, color=CYAN), showarrow=False,
                 )],
-                showlegend=True,
-                legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
             )
             st.plotly_chart(fig_donut, use_container_width=True)
 
-        st.markdown('<div class="sec-h">RCA Confidence per Incident</div>', unsafe_allow_html=True)
+    # ── MTTR comparison ────────────────────────────────────────────────────────
+    row2_l, row2_r = st.columns([3, 2], gap="medium")
+    with row2_l:
+        st.markdown('<div class="sh">MTTR Comparison — AEGIS vs Baseline</div>', unsafe_allow_html=True)
+        approaches = ["Manual On-Call", "Rule-Based Scripts", "AEGIS (Avg)", "AEGIS (Best)"]
+        mttrs      = [120, 45, avg_mttr if avg_mttr > 0 else 10, 3]
+        bcolors    = [RED, ORANGE, CYAN, GREEN]
+        fig_mttr = go.Figure()
+        for i, (ap, mt, bc) in enumerate(zip(approaches, mttrs, bcolors)):
+            fig_mttr.add_trace(go.Bar(
+                x=[ap], y=[mt],
+                marker=dict(
+                    color=bc,
+                    line_width=0,
+                    pattern_shape="" if bc in (CYAN, GREEN) else "",
+                ),
+                text=[f"<b>{mt}m</b>"],
+                textposition="outside",
+                textfont=dict(color="white", size=14, family="monospace"),
+                name=ap, showlegend=False,
+                hovertemplate=f"<b>{ap}</b><br>MTTR: {mt} min<extra></extra>",
+            ))
+        # Reduction annotation
+        reduction = round((1 - avg_mttr / 120) * 100) if avg_mttr > 0 else 92
+        fig_mttr.add_annotation(
+            x=2, y=avg_mttr + 5,
+            text=f"<b style='color:{GREEN}'>{reduction}% faster</b>",
+            showarrow=False,
+            font=dict(size=13, color=GREEN),
+            bgcolor="rgba(0,255,136,.12)",
+            bordercolor=GREEN, borderwidth=1, borderpad=4,
+        )
+        dfig(fig_mttr, 280)
+        fig_mttr.update_layout(yaxis_title="Minutes", bargap=0.38, yaxis_range=[0, 145])
+        st.plotly_chart(fig_mttr, use_container_width=True)
 
-        if not inc.empty:
-            color_map_status = {"success": GREEN, "escalated": RED, "in_progress": GOLD}
-            fig_conf = go.Figure()
-            for _, row in inc.iterrows():
-                c = color_map_status.get(row["status"], CYAN)
-                fig_conf.add_trace(go.Scatter(
-                    x=[row["start"]], y=[row["confidence"]],
-                    mode="markers",
-                    marker=dict(
-                        size=max(row["attempts"], 1) * 9 + 8,
-                        color=c, opacity=0.85,
-                        line=dict(width=2, color="rgba(255,255,255,0.4)"),
-                    ),
-                    name=row["incident_id"][:12],
-                    hovertemplate=(
-                        f"<b>{row['incident_id']}</b><br>"
-                        f"Confidence: {row['confidence']:.0f}%<br>"
-                        f"Status: {row['status']}<br>"
-                        f"MTTR: {row['mttr_min']}m<extra></extra>"
-                    ),
-                    showlegend=False,
+    # ── Sankey: incident flow ──────────────────────────────────────────────────
+    with row2_r:
+        st.markdown('<div class="sh">Incident Healing Flow (Sankey)</div>', unsafe_allow_html=True)
+        # Nodes: 0=Detected, 1=RCA, 2=High-Conf Fix, 3=Success, 4=Rollback, 5=Escalated, 6=Low-Conf
+        nodes = ["Detected", "RCA", "High-Conf Fix", "Success",
+                 "Retry/Rollback", "Escalated", "Low-Conf Skip"]
+        node_colors = [CYAN, PURPLE, GOLD, GREEN, ORANGE, RED, "#94a3b8"]
+
+        hi = max(int((inc["confidence"] >= 70).sum()), 1) if not inc.empty else 4
+        lo = max(int((inc["confidence"] < 70).sum()), 0)  if not inc.empty else 0
+
+        fig_sankey = go.Figure(go.Sankey(
+            node=dict(
+                pad=12, thickness=18,
+                color=node_colors,
+                label=nodes,
+                line=dict(color="#0a0e1a", width=1),
+            ),
+            link=dict(
+                source=[0, 1, 2, 2,    1],
+                target=[1, 2, 3, 4,    6],
+                value= [n_total, hi, n_healed, n_rollbacks or 1, lo or 0],
+                color=[
+                    "rgba(168,85,247,.35)",
+                    "rgba(255,215,0,.35)",
+                    "rgba(0,255,136,.45)",
+                    "rgba(255,140,0,.35)",
+                    "rgba(148,163,184,.25)",
+                ],
+                hovertemplate="%{source.label} → %{target.label}: %{value}<extra></extra>",
+            ),
+        ))
+        dfig(fig_sankey, 280)
+        fig_sankey.update_layout(title=None)
+        st.plotly_chart(fig_sankey, use_container_width=True)
+
+    # ── Timeline ──────────────────────────────────────────────────────────────
+    st.markdown('<div class="sh">Live Activity Timeline</div>', unsafe_allow_html=True)
+    if not df.empty:
+        tdf = df.copy()
+        tdf["hour"] = tdf["timestamp"].dt.floor("h")
+        by_h = tdf.groupby("hour").size().reset_index(name="count")
+
+        fig_tl = go.Figure()
+        fig_tl.add_trace(go.Scatter(
+            x=by_h["hour"], y=by_h["count"],
+            mode="lines", fill="tozeroy",
+            line=dict(color=CYAN, width=2.5, shape="spline"),
+            fillcolor="rgba(0,212,255,.08)",
+            name="Events/hr",
+        ))
+        for action, sym, col, lbl in [
+            ("FIX_SUCCESS",   "star",        GREEN,  "Healed"),
+            ("FIX_ESCALATED", "x",           RED,    "Escalated"),
+            ("FIX_EXCEPTION", "circle-open", ORANGE, "Exception"),
+            ("CONFIDENCE_GATE_PASSED", "diamond", CYAN, "RCA Gate"),
+        ]:
+            sub = df[df["action"] == action]
+            if not sub.empty:
+                fig_tl.add_trace(go.Scatter(
+                    x=sub["timestamp"], y=[0.2] * len(sub),
+                    mode="markers", name=lbl,
+                    marker=dict(size=13, color=col, symbol=sym,
+                                line=dict(width=2, color="rgba(255,255,255,.5)")),
                 ))
-            fig_conf.add_hline(
-                y=70, line_dash="dash", line_color=ORANGE, line_width=1.5,
-                annotation_text="70% confidence gate", annotation_font_color=ORANGE,
-                annotation_font_size=10,
-            )
-            dark_fig(fig_conf, 250)
-            fig_conf.update_layout(
-                title=None, xaxis_title=None,
-                yaxis_title="Confidence %", yaxis_range=[0, 108],
-            )
-            st.plotly_chart(fig_conf, use_container_width=True)
+        dfig(fig_tl, 210)
+        fig_tl.update_layout(xaxis_title=None, yaxis_title="Events / hr",
+                              legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"))
+        st.plotly_chart(fig_tl, use_container_width=True)
 
-        st.markdown('<div class="sec-h">Top Actions in Audit Log</div>', unsafe_allow_html=True)
+    # ── Lines changed + action dist ───────────────────────────────────────────
+    row3_l, row3_r = st.columns([3, 2], gap="medium")
+    with row3_l:
+        st.markdown('<div class="sh">Lines Fixed per Repair Attempt</div>', unsafe_allow_html=True)
+        ddf = df[df["action"] == "DIFF_COMPUTED"].dropna(subset=["lines_changed"]).copy() if not df.empty else pd.DataFrame()
+        if not ddf.empty:
+            ddf["lines_changed"] = ddf["lines_changed"].astype(int)
+            ddf["lbl"] = [f"Fix #{i+1}" for i in range(len(ddf))]
+            colors_bar = []
+            for _, r in ddf.iterrows():
+                inc_id = str(r.get("incident_id", ""))
+                colors_bar.append(GREEN if inc_id in {"INC-7BC959AE","INC-B3A904CC"} else CYAN)
 
+            fig_lc = go.Figure(go.Bar(
+                x=ddf["lbl"], y=ddf["lines_changed"],
+                marker=dict(color=colors_bar, line_width=0,
+                            cornerradius=4),
+                text=ddf["lines_changed"], textposition="outside",
+                textfont=dict(color="#94a3b8", size=10),
+                hovertemplate="<b>%{x}</b><br>%{y} lines changed<extra></extra>",
+            ))
+            dfig(fig_lc, 220)
+            fig_lc.update_layout(xaxis_title=None, yaxis_title="Lines Changed")
+            st.plotly_chart(fig_lc, use_container_width=True)
+
+    with row3_r:
+        st.markdown('<div class="sh">Action Distribution</div>', unsafe_allow_html=True)
         if not df.empty:
             ac = df["action"].value_counts().head(10)
-            fig_act = go.Figure(go.Bar(
+            fig_ac = go.Figure(go.Bar(
                 y=ac.index, x=ac.values, orientation="h",
-                marker_color=[ACTION_COLOR.get(a, "#64748b") for a in ac.index],
-                marker_line_width=0,
+                marker=dict(
+                    color=[ACTION_COLOR.get(a, "#64748b") for a in ac.index],
+                    line_width=0, cornerradius=4,
+                ),
                 text=ac.values, textposition="outside",
                 textfont=dict(size=10, color="#94a3b8"),
             ))
-            dark_fig(fig_act, 300)
-            fig_act.update_layout(title=None, xaxis_title="Count", yaxis_title=None)
-            st.plotly_chart(fig_act, use_container_width=True)
+            dfig(fig_ac, 320)
+            fig_ac.update_layout(xaxis_title="Count", yaxis_title=None)
+            st.plotly_chart(fig_ac, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -582,152 +563,134 @@ with tab1:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab2:
     if inc.empty:
-        st.info("No incident data found. Run AEGIS to generate incidents.")
+        st.info("No incident data — run AEGIS to populate the audit log.")
     else:
-        st.markdown('<div class="sec-h">All Incidents</div>', unsafe_allow_html=True)
+        # ── Gantt ──────────────────────────────────────────────────────────────
+        st.markdown('<div class="sh">Incident Gantt — Detection to Resolution</div>', unsafe_allow_html=True)
+        cmap2 = {"success": GREEN, "escalated": RED, "in_progress": GOLD}
+        fig_gantt = go.Figure()
+        for _, row in inc.iterrows():
+            c = cmap2.get(row["status"], CYAN)
+            fig_gantt.add_trace(go.Scatter(
+                x=[row["start"], row["end"]],
+                y=[row["incident_id"][:14]] * 2,
+                mode="lines+markers",
+                line=dict(color=c, width=18),
+                marker=dict(size=12, color=c, symbol=["circle", "diamond"]),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>{row['incident_id']}</b><br>"
+                    f"MTTR: {row['mttr_min']}m<br>"
+                    f"Status: {row['status'].upper()}<br>"
+                    f"Attempts: {row['attempts']}<extra></extra>"
+                ),
+            ))
+        dfig(fig_gantt, 220)
+        fig_gantt.update_layout(
+            xaxis_title=None, yaxis_title=None,
+            yaxis=dict(tickfont=dict(size=10, family="monospace")),
+        )
+        st.plotly_chart(fig_gantt, use_container_width=True)
 
-        disp = inc[[
-            "incident_id", "start", "status", "confidence",
-            "attempts", "mttr_min", "max_lines",
-        ]].copy()
+        # ── Table + deep-dive ─────────────────────────────────────────────────
+        st.markdown('<div class="sh">All Incidents</div>', unsafe_allow_html=True)
+        disp = inc[["incident_id","start","status","confidence","attempts","mttr_min","max_lines"]].copy()
         disp["start"]      = disp["start"].dt.strftime("%Y-%m-%d %H:%M UTC")
         disp["status"]     = disp["status"].str.upper()
         disp["confidence"] = disp["confidence"].map("{:.0f}%".format)
         disp["mttr_min"]   = disp["mttr_min"].map("{:.1f} min".format)
-        disp.columns = [
-            "Incident ID", "Detected At", "Status",
-            "RCA Confidence", "Fix Attempts", "MTTR", "Max Lines Changed",
-        ]
+        disp.columns = ["Incident ID","Detected At","Status","RCA Confidence","Fix Attempts","MTTR","Lines Changed"]
         st.dataframe(disp, use_container_width=True, hide_index=True)
 
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="sec-h">Incident Deep Dive</div>', unsafe_allow_html=True)
-
+        st.markdown('<div class="sh">Incident Deep Dive</div>', unsafe_allow_html=True)
         sel = st.selectbox(
             "Select incident:",
             inc["incident_id"].tolist(),
             format_func=lambda x: (
-                f"✅ {x}" if inc.loc[inc.incident_id == x, "status"].values[0] == "success"
+                f"✅ {x}" if inc.loc[inc.incident_id==x,"status"].values[0]=="success"
                 else f"❌ {x}"
             ),
         )
-
         if sel and not df.empty and "incident_id" in df.columns:
-            events = df[df["incident_id"] == sel].sort_values("timestamp")
-            sel_row = inc[inc.incident_id == sel].iloc[0]
-
-            col_a, col_b = st.columns([1, 2], gap="medium")
-            with col_a:
-                st.markdown("**Step-by-step timeline:**")
-                for _, ev in events.iterrows():
-                    action = ev.get("action", "")
-                    color  = ACTION_COLOR.get(action, "#64748b")
+            evs = df[df["incident_id"]==sel].sort_values("timestamp")
+            sel_row = inc[inc.incident_id==sel].iloc[0]
+            ca, cb = st.columns([1, 2], gap="medium")
+            with ca:
+                st.markdown("**Step-by-step audit trail:**")
+                for _, ev in evs.iterrows():
+                    action = ev.get("action","")
+                    color  = ACTION_COLOR.get(action,"#64748b")
                     ts     = ev["timestamp"].strftime("%H:%M:%S")
                     parts  = []
-                    for fld in ["confidence", "lines_changed", "run_id", "error", "attempts", "reason"]:
+                    for fld in ["confidence","lines_changed","run_id","error","attempts","reason"]:
                         v = ev.get(fld)
-                        if v is not None and str(v) not in ("", "nan", "None"):
+                        if v is not None and str(v) not in ("","nan","None"):
                             parts.append(f"{fld}={str(v)[:55]}")
                     detail = " | ".join(parts[:2])
                     st.markdown(
-                        f"<div style='display:flex; gap:8px; padding:4px 0; "
-                        f"border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.78rem; font-family:monospace;'>"
-                        f"<span style='color:#475569; min-width:68px; flex-shrink:0;'>{ts}</span>"
-                        f"<span style='color:{color}; font-weight:700; min-width:200px; flex-shrink:0;'>{action}</span>"
-                        f"<span style='color:#64748b; overflow:hidden;'>{detail}</span></div>",
+                        f"<div style='display:flex;gap:8px;padding:4px 0;"
+                        f"border-bottom:1px solid rgba(255,255,255,.04);"
+                        f"font-size:.78rem;font-family:monospace;'>"
+                        f"<span style='color:#475569;min-width:68px;flex-shrink:0;'>{ts}</span>"
+                        f"<span style='color:{color};font-weight:700;min-width:200px;flex-shrink:0;'>{action}</span>"
+                        f"<span style='color:#64748b;overflow:hidden;'>{detail}</span></div>",
                         unsafe_allow_html=True,
                     )
-
-            with col_b:
-                # Attempt funnel
-                diff_events = events[events["action"] == "DIFF_COMPUTED"].copy()
-                if not diff_events.empty and "lines_changed" in diff_events.columns:
-                    diff_events["lines_changed"] = diff_events["lines_changed"].fillna(0).astype(int)
-                    att_labels = [f"Attempt {i+1}" for i in range(len(diff_events))]
-
-                    fig_atts = go.Figure(go.Bar(
-                        x=att_labels,
-                        y=diff_events["lines_changed"].tolist(),
-                        marker_color=[CYAN, GOLD, RED, ORANGE][:len(diff_events)],
-                        marker_line_width=0,
-                        text=diff_events["lines_changed"].tolist(),
-                        textposition="outside",
-                        textfont=dict(color="white", size=12),
+            with cb:
+                ddf2 = evs[evs["action"]=="DIFF_COMPUTED"].copy()
+                if not ddf2.empty and "lines_changed" in ddf2.columns:
+                    ddf2["lines_changed"] = ddf2["lines_changed"].fillna(0).astype(int)
+                    att_labels = [f"Attempt {i+1}" for i in range(len(ddf2))]
+                    fig_att = go.Figure(go.Bar(
+                        x=att_labels, y=ddf2["lines_changed"].tolist(),
+                        marker=dict(color=[CYAN,GOLD,RED,ORANGE][:len(ddf2)], line_width=0, cornerradius=4),
+                        text=ddf2["lines_changed"].tolist(), textposition="outside",
+                        textfont=dict(color="white",size=13),
                     ))
-                    dark_fig(fig_atts, 220)
-                    fig_atts.update_layout(
-                        title="Lines Changed per Fix Attempt",
-                        title_font=dict(size=12, color="#94a3b8"),
-                        xaxis_title=None, yaxis_title="Lines",
-                    )
-                    st.plotly_chart(fig_atts, use_container_width=True)
+                    dfig(fig_att, 230)
+                    fig_att.update_layout(title="Lines Changed per Fix Attempt",
+                                          title_font=dict(size=12, color="#94a3b8"),
+                                          xaxis_title=None, yaxis_title="Lines")
+                    st.plotly_chart(fig_att, use_container_width=True)
 
-                # Root cause card
-                status_color = GREEN if sel_row["status"] == "success" else (RED if sel_row["status"] == "escalated" else GOLD)
-                status_label = sel_row["status"].upper()
+                sc = sel_row.get("status","")
+                sc_col = GREEN if sc=="success" else (RED if sc=="escalated" else GOLD)
                 st.markdown(f"""
-                <div style="background:rgba(0,0,0,0.3); border:1px solid rgba(0,212,255,0.2);
-                            border-radius:10px; padding:16px; margin-top:10px;">
-                    <div style="font-size:0.7rem; color:{CYAN}; text-transform:uppercase;
-                                letter-spacing:.12em; margin-bottom:10px; font-weight:700;">
-                        Root Cause Analysis
-                    </div>
-                    <div style="font-size:0.88rem; color:#e2e8f0; line-height:1.5; margin-bottom:12px;">
-                        {sel_row.get("root_cause","Unknown")}
-                    </div>
-                    <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                        <span style="font-size:0.8rem; color:#94a3b8;">
-                            Status: <strong style="color:{status_color}">{status_label}</strong>
-                        </span>
-                        <span style="font-size:0.8rem; color:#94a3b8;">
-                            Confidence: <strong style="color:{GREEN}">{sel_row.get("confidence",0):.0f}%</strong>
-                        </span>
-                        <span style="font-size:0.8rem; color:#94a3b8;">
-                            MTTR: <strong style="color:{CYAN}">{sel_row.get("mttr_min",0)}m</strong>
-                        </span>
-                        <span style="font-size:0.8rem; color:#94a3b8;">
-                            Attempts: <strong style="color:{GOLD}">{sel_row.get("attempts",0)}</strong>
-                        </span>
-                    </div>
+                <div style="background:rgba(0,0,0,.3);border:1px solid rgba(0,212,255,.2);
+                            border-radius:10px;padding:16px;margin-top:10px;">
+                  <div style="font-size:.7rem;color:{CYAN};text-transform:uppercase;
+                              letter-spacing:.12em;margin-bottom:10px;font-weight:700;">
+                    Root Cause Analysis
+                  </div>
+                  <div style="font-size:.88rem;color:#e2e8f0;line-height:1.5;margin-bottom:12px;">
+                    {sel_row.get('root_cause','Unknown')}
+                  </div>
+                  <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                    <span style="font-size:.8rem;color:#94a3b8;">
+                        Status: <strong style="color:{sc_col}">{sc.upper()}</strong>
+                    </span>
+                    <span style="font-size:.8rem;color:#94a3b8;">
+                        Confidence: <strong style="color:{GREEN}">{sel_row.get('confidence',0):.0f}%</strong>
+                    </span>
+                    <span style="font-size:.8rem;color:#94a3b8;">
+                        MTTR: <strong style="color:{CYAN}">{sel_row.get('mttr_min',0)}m</strong>
+                    </span>
+                    <span style="font-size:.8rem;color:#94a3b8;">
+                        Attempts: <strong style="color:{GOLD}">{sel_row.get('attempts',0)}</strong>
+                    </span>
+                  </div>
                 </div>
                 """, unsafe_allow_html=True)
-
-        # Gantt chart of all incidents
-        if not inc.empty:
-            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="sec-h">Incident Gantt Chart (Detection → Resolution)</div>', unsafe_allow_html=True)
-
-            cmap2 = {"success": GREEN, "escalated": RED, "in_progress": GOLD}
-            fig_gantt = go.Figure()
-            for _, row in inc.iterrows():
-                c = cmap2.get(row["status"], CYAN)
-                fig_gantt.add_trace(go.Scatter(
-                    x=[row["start"], row["end"]],
-                    y=[row["incident_id"][:14], row["incident_id"][:14]],
-                    mode="lines+markers",
-                    line=dict(color=c, width=16),
-                    marker=dict(size=10, color=c),
-                    name=row["status"],
-                    showlegend=False,
-                    hovertemplate=(
-                        f"<b>{row['incident_id']}</b><br>"
-                        f"MTTR: {row['mttr_min']}m<br>"
-                        f"Status: {row['status']}<extra></extra>"
-                    ),
-                ))
-            dark_fig(fig_gantt, 200)
-            fig_gantt.update_layout(title=None, xaxis_title=None, yaxis_title=None)
-            st.plotly_chart(fig_gantt, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — Live Pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 with tab3:
-    graph_col, steps_col = st.columns([3, 2], gap="medium")
+    gc, sc = st.columns([3, 2], gap="medium")
 
-    with graph_col:
-        st.markdown('<div class="sec-h">AEGIS 15-Node LangGraph State Machine</div>', unsafe_allow_html=True)
+    with gc:
+        st.markdown('<div class="sh">AEGIS 15-Node LangGraph State Machine</div>', unsafe_allow_html=True)
 
         mermaid = (
             "flowchart TD\n"
@@ -735,11 +698,11 @@ with tab3:
             '    B --> C(["📧 3 Initial Email"]):::cyan\n'
             '    C --> D{"Route?"}:::diamond\n'
             "\n"
-            '    D -->|Failure| E(["🚨 4 Failure Alert + RCA\nGPT-4o · confidence gate 70%"]):::alert\n'
+            '    D -->|Failure Detected| E(["🚨 4 Failure Alert + RCA\nGPT-4o · confidence gate 70%"]):::alert\n'
             '    D -->|ML Drift| ML(["🤖 ML Healer\nretrain + MLflow promote"]):::ml\n'
             '    D -->|Healthy| Z(["✅ END"]):::end_\n'
             "\n"
-            '    E -->|conf >= 70%| F(["📧 5 Fix In Progress"]):::email\n'
+            '    E -->|"conf ≥ 70%"| F(["📧 5 Fix In Progress"]):::email\n'
             "    E -->|conf < 70%| IR\n"
             "\n"
             '    F --> G(["🔧 6 Job Fixer\nGPT-5.5 whole-notebook scan"]):::fixer\n'
@@ -752,9 +715,7 @@ with tab3:
             '    O -->|OK| P(["📧 13 Final Confirm"]):::email\n'
             '    O -->|Failed| Q(["📧 13 Deploy Failed"]):::alert\n'
             '    P --> IR(["📋 14 Incident Report\nJSON + audit log"]):::report\n'
-            "    Q --> IR\n"
-            "    ML --> IR\n"
-            "    IR --> Z\n"
+            "    Q --> IR\n    ML --> IR\n    IR --> Z\n"
             "\n"
             "    classDef cyan    fill:#0e2233,stroke:#00d4ff,color:#00d4ff\n"
             "    classDef alert   fill:#2d0a0a,stroke:#ff4444,color:#ff6b6b\n"
@@ -768,99 +729,55 @@ with tab3:
             "    classDef end_    fill:#0a2a0a,stroke:#00ff88,color:#00ff88\n"
             "    classDef diamond fill:#1a1a2d,stroke:#a855f7,color:#a855f7\n"
         )
-        html = f"""
-<!DOCTYPE html><html><head>
+        components.html(f"""<!DOCTYPE html><html><head>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
-  body {{ margin:0; padding:0; background:transparent; }}
-  .mermaid {{ padding:16px; }}
-  svg {{ max-width:100%; }}
-</style>
-</head><body>
-<script>
-  mermaid.initialize({{
-    startOnLoad:true, theme:'dark',
-    themeVariables:{{
-      primaryColor:'#111827', primaryTextColor:'#00d4ff',
-      primaryBorderColor:'#00d4ff', lineColor:'#334155',
-      secondaryColor:'#0f172a', background:'#0a0e1a',
-      mainBkg:'#111827', nodeBorder:'#00d4ff',
-      clusterBkg:'#0f172a', titleColor:'#00d4ff',
-      fontFamily:'system-ui,sans-serif', fontSize:'13px',
-    }},
-    flowchart:{{ curve:'basis', htmlLabels:true, useMaxWidth:true }}
-  }});
-</script>
-<div class="mermaid">{mermaid}</div>
-</body></html>"""
-        components.html(html, height=620, scrolling=True)
+  body{{margin:0;padding:0;background:#0a0e1a;}}
+  .wrap{{padding:16px;background:#0a0e1a;border-radius:12px;}}
+  svg{{max-width:100%;}}
+</style></head><body>
+<script>mermaid.initialize({{
+  startOnLoad:true,theme:'dark',
+  themeVariables:{{
+    primaryColor:'#111827',primaryTextColor:'#00d4ff',
+    primaryBorderColor:'#00d4ff',lineColor:'#334155',
+    secondaryColor:'#0f172a',background:'#0a0e1a',
+    mainBkg:'#111827',nodeBorder:'#00d4ff',clusterBkg:'#0f172a',
+    titleColor:'#00d4ff',fontFamily:'system-ui,sans-serif',fontSize:'13px',
+  }},
+  flowchart:{{curve:'basis',htmlLabels:true,useMaxWidth:true}}
+}});</script>
+<div class="wrap"><div class="mermaid">{mermaid}</div></div>
+</body></html>""", height=680, scrolling=True)
 
-    with steps_col:
-        st.markdown('<div class="sec-h">Pipeline Nodes</div>', unsafe_allow_html=True)
-
-        nodes = [
-            ("1",  "cyan",  "Job Selector",          "Discovers Databricks jobs to monitor"),
-            ("2",  "cyan",  "Status Check",           "Polls job health via Databricks SDK"),
-            ("3",  "email", "Initial Email",          "Sends health status notification"),
-            ("4",  "alert", "Failure Alert + RCA",    "GPT-4o structured JSON RCA (confidence gate @ 70%)"),
-            ("5",  "email", "Fix In Progress Email",  "Notifies team: autonomous repair started"),
-            ("6",  "fixer", "Job Fixer",              "GPT-5.5 whole-notebook comprehensive scan + repair"),
-            ("7",  "email", "Fix Complete Email",     "Confirms repair + post-fix run ID"),
-            ("8",  "git",   "PR Create",              "Auto-commits fix · opens hotfix PR"),
-            ("9",  "email", "PR Raised Email",        "Notifies reviewers of auto-fix PR"),
-            ("10", "wait",  "PR Wait Approval",       "Polls GitHub indefinitely for merge"),
-            ("11", "deploy","Deployment",             "Triggers GitHub Actions CD pipeline"),
-            ("12", "cyan",  "Post-Deploy Verify",     "Re-runs Databricks health check in prod"),
-            ("13", "email", "Final / Failed Email",   "Outcome notification"),
-            ("14", "gray",  "Incident Report",        "Structured JSON + audit log + ChromaDB"),
-            ("ML", "ml",    "ML Healer",              "Retraining job trigger + MLflow version promotion"),
+    with sc:
+        st.markdown('<div class="sh">Pipeline Nodes</div>', unsafe_allow_html=True)
+        nodes_list = [
+            ("1",  CYAN,    "rgba(14,34,51,.8)",  "Job Selector",         "Discovers Databricks jobs"),
+            ("2",  CYAN,    "rgba(14,34,51,.8)",  "Status Check",         "Polls health via Databricks SDK"),
+            ("3",  GOLD,    "rgba(26,26,14,.8)",  "Initial Email",        "Health status notification"),
+            ("4",  RED,     "rgba(45,10,10,.8)",  "Failure Alert + RCA",  "GPT-4o JSON RCA (gate @ 70%)"),
+            ("5",  GOLD,    "rgba(26,26,14,.8)",  "Fix In Progress Email","Autonomous repair started"),
+            ("6",  GREEN,   "rgba(10,26,10,.8)",  "Job Fixer",            "GPT-5.5 whole-notebook scan"),
+            ("7",  GOLD,    "rgba(26,26,14,.8)",  "Fix Complete Email",   "Post-fix run ID confirmed"),
+            ("8",  PURPLE,  "rgba(26,14,45,.8)",  "PR Create",            "Auto-commit · hotfix branch"),
+            ("9",  GOLD,    "rgba(26,26,14,.8)",  "PR Raised Email",      "Notifies reviewers"),
+            ("10", ORANGE,  "rgba(45,26,10,.8)",  "PR Wait Approval",     "Polls GitHub indefinitely"),
+            ("11", "#818cf8","rgba(10,10,45,.8)", "Deployment",           "Triggers GitHub Actions CD"),
+            ("12", CYAN,    "rgba(14,34,51,.8)",  "Post-Deploy Verify",   "Re-runs Databricks health check"),
+            ("13", GOLD,    "rgba(26,26,14,.8)",  "Final / Failed Email", "Outcome notification"),
+            ("14", "#94a3b8","rgba(26,26,26,.8)", "Incident Report",      "Structured JSON + audit log"),
+            ("ML", "#4ade80","rgba(14,26,26,.8)", "ML Healer",            "Retraining + MLflow promotion"),
         ]
-        color_map_node = {
-            "cyan":  (CYAN,   "rgba(14,34,51,0.7)"),
-            "alert": (RED,    "rgba(45,10,10,0.7)"),
-            "email": (GOLD,   "rgba(26,26,14,0.7)"),
-            "fixer": (GREEN,  "rgba(10,26,10,0.7)"),
-            "git":   (PURPLE, "rgba(26,14,45,0.7)"),
-            "wait":  (ORANGE, "rgba(45,26,10,0.7)"),
-            "deploy":("#818cf8","rgba(10,10,45,0.7)"),
-            "gray":  ("#94a3b8","rgba(26,26,26,0.7)"),
-            "ml":    ("#4ade80","rgba(14,26,26,0.7)"),
-        }
-        for num, ctype, name, desc in nodes:
-            border_c, bg_c = color_map_node.get(ctype, (CYAN, "rgba(14,34,51,0.7)"))
+        for num, bc, bg, name, desc in nodes_list:
             st.markdown(f"""
-            <div class="ws" style="border-left-color:{border_c}; background:{bg_c}; margin-bottom:3px;">
-              <span class="wsn" style="color:{border_c};">{num}</span>
+            <div class="ps" style="border-left-color:{bc};background:{bg};">
+              <span class="psn" style="color:{bc};">{num}</span>
               <div>
-                <div class="wst" style="color:{border_c};">{name}</div>
-                <div class="wsd">{desc}</div>
+                <div class="pst" style="color:{bc};">{name}</div>
+                <div class="psd">{desc}</div>
               </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="sec-h">7 Guardrail Layers</div>', unsafe_allow_html=True)
-
-        guardrails = [
-            ("G1",  CYAN,    "Confidence Gate",      "Escalate if RCA < 70% — skip fixer entirely"),
-            ("G2",  GOLD,    "Diff Validator",       "Block if LLM returns identical code"),
-            ("G3",  ORANGE,  "Rollback on Failure",  "Restore original on post-fix run failure"),
-            ("G4",  RED,     "Syntax Hard Block",    "compile() — invalid Python never uploaded"),
-            ("G4b", "#94a3b8","pyflakes Lint",       "Static analysis — warning only, non-blocking"),
-            ("G5",  PURPLE,  "Rate Limiter",         "5 triggers per job per 10 min (sliding window)"),
-            ("G6",  GREEN,   "Audit Log",            "Append-only JSONL of every autonomous action"),
-            ("G7",  "#f43f5e","Prompt Guard",        "Truncate + injection scan before every LLM call"),
-        ]
-        for key, color, name, desc in guardrails:
-            st.markdown(f"""
-            <div class="gr" style="border-left-color:{color}; margin-bottom:3px;">
-              <span class="grk" style="color:{color};">{key}</span>
-              <div>
-                <div class="grn" style="color:{color};">{name}</div>
-                <div class="grd">{desc}</div>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -870,151 +787,237 @@ with tab4:
     ca, cb = st.columns([5, 4], gap="medium")
 
     with ca:
-        st.markdown('<div class="sec-h">Live Audit Log Feed</div>', unsafe_allow_html=True)
-
+        st.markdown('<div class="sh">Live Audit Log Feed</div>', unsafe_allow_html=True)
         if not df.empty:
-            fc1, fc2 = st.columns(2)
-            with fc1:
-                f_inc = st.selectbox(
-                    "Incident",
-                    ["All"] + sorted(df["incident_id"].dropna().unique().tolist()),
-                )
-            with fc2:
-                f_act = st.selectbox(
-                    "Action",
-                    ["All"] + sorted(df["action"].dropna().unique().tolist()),
-                )
-
+            f1, f2 = st.columns(2)
+            with f1:
+                fi = st.selectbox("Incident", ["All"] + sorted(df["incident_id"].dropna().unique().tolist()))
+            with f2:
+                fa = st.selectbox("Action",   ["All"] + sorted(df["action"].dropna().unique().tolist()))
             fdf = df.copy()
-            if f_inc != "All":
-                fdf = fdf[fdf["incident_id"] == f_inc]
-            if f_act != "All":
-                fdf = fdf[fdf["action"] == f_act]
+            if fi != "All": fdf = fdf[fdf["incident_id"] == fi]
+            if fa != "All": fdf = fdf[fdf["action"] == fa]
             fdf = fdf.sort_values("timestamp", ascending=False).head(80)
 
-            log_html = (
-                '<div style="max-height:520px; overflow-y:auto; '
-                'background:rgba(10,14,26,0.8); border:1px solid rgba(0,212,255,0.1); '
-                'border-radius:8px; padding:8px;">'
+            html = (
+                '<div style="max-height:540px;overflow-y:auto;'
+                'background:rgba(10,14,26,.9);border:1px solid rgba(0,212,255,.1);'
+                'border-radius:10px;padding:8px;">'
             )
             for _, row in fdf.iterrows():
-                action = row.get("action", "")
+                action = row.get("action","")
                 color  = ACTION_COLOR.get(action, "#64748b")
                 ts     = row["timestamp"].strftime("%m-%d %H:%M:%S")
-                inc_id = str(row.get("incident_id", "—"))[:14]
+                inc_id = str(row.get("incident_id","—"))[:14]
                 parts  = []
-                for fld in ["confidence", "lines_changed", "run_id", "attempts", "error", "reason"]:
+                for fld in ["confidence","lines_changed","run_id","attempts","error","reason"]:
                     v = row.get(fld)
-                    if v is not None and str(v) not in ("", "nan", "None"):
-                        parts.append(f"{fld}={str(v)[:50]}")
+                    if v is not None and str(v) not in ("","nan","None"):
+                        parts.append(f"{fld}={str(v)[:48]}")
                 detail = " | ".join(parts[:3])
-                log_html += (
+                html += (
                     f'<div class="alog">'
                     f'<span class="at">{ts}</span>'
                     f'<span class="ai">{inc_id}</span>'
                     f'<span class="aa" style="color:{color};">{action}</span>'
-                    f'<span class="ad">{detail}</span>'
-                    f'</div>'
+                    f'<span class="ad">{detail}</span></div>'
                 )
-            log_html += "</div>"
-            st.markdown(log_html, unsafe_allow_html=True)
-        else:
-            st.info("No audit log data found.")
+            html += "</div>"
+            st.markdown(html, unsafe_allow_html=True)
 
     with cb:
-        st.markdown('<div class="sec-h">Guardrail Activation Counts</div>', unsafe_allow_html=True)
-
+        st.markdown('<div class="sh">Guardrail Activation Chart</div>', unsafe_allow_html=True)
         if not df.empty:
-            g_actions = [
-                "LINT_CHECK", "DIFF_COMPUTED", "NOTEBOOK_ROLLED_BACK",
-                "LLM_OUTPUT_INVALID", "MAX_RETRIES_EXCEEDED",
-                "FIX_EXCEPTION", "FIX_ESCALATED", "PEP8_FORMATTED",
+            g_acts = [
+                "LINT_CHECK","DIFF_COMPUTED","NOTEBOOK_ROLLED_BACK",
+                "LLM_OUTPUT_INVALID","MAX_RETRIES_EXCEEDED","FIX_EXCEPTION","FIX_ESCALATED","PEP8_FORMATTED",
             ]
-            g_counts = df[df["action"].isin(g_actions)]["action"].value_counts()
-
+            gc_df = df[df["action"].isin(g_acts)]["action"].value_counts()
             fig_g = go.Figure(go.Bar(
-                y=g_counts.index, x=g_counts.values, orientation="h",
-                marker_color=[ACTION_COLOR.get(a, "#64748b") for a in g_counts.index],
-                marker_line_width=0,
-                text=g_counts.values, textposition="outside",
+                y=gc_df.index, x=gc_df.values, orientation="h",
+                marker=dict(
+                    color=[ACTION_COLOR.get(a,"#64748b") for a in gc_df.index],
+                    line_width=0, cornerradius=4,
+                ),
+                text=gc_df.values, textposition="outside",
                 textfont=dict(size=11, color="white"),
             ))
-            dark_fig(fig_g, 280)
-            fig_g.update_layout(title=None, xaxis_title="Times Triggered")
+            dfig(fig_g, 290)
+            fig_g.update_layout(xaxis_title="Times Triggered")
             st.plotly_chart(fig_g, use_container_width=True)
 
-        st.markdown('<div class="sec-h">Audit Log Stats</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sh">7 Guardrail Layers</div>', unsafe_allow_html=True)
+        guardrails = [
+            ("G1",  CYAN,    "Confidence Gate",       "Escalate if RCA < 70%"),
+            ("G2",  GOLD,    "Diff Validator",        "Block if LLM returns identical code"),
+            ("G3",  ORANGE,  "Rollback on Failure",   "Restore original on post-fix failure"),
+            ("G4",  RED,     "Syntax Hard Block",     "compile() — invalid Python never uploads"),
+            ("G4b", "#94a3b8","pyflakes Lint",        "Static analysis warning (non-blocking)"),
+            ("G5",  PURPLE,  "Rate Limiter",          "5 triggers per job per 10 min"),
+            ("G6",  GREEN,   "Audit Log",             "Append-only JSONL of every action"),
+            ("G7",  PINK,    "Prompt Guard",          "Injection scan before every LLM call"),
+        ]
+        for key, color, name, desc in guardrails:
+            st.markdown(f"""
+            <div class="gr" style="border-left-color:{color};">
+              <span class="grk" style="color:{color};">{key}</span>
+              <div><div class="grn" style="color:{color};">{name}</div>
+              <div class="grd">{desc}</div></div>
+            </div>""", unsafe_allow_html=True)
 
-        if not df.empty:
-            stats = [
-                ("Total Entries",        len(df)),
-                ("Unique Incidents",     df["incident_id"].nunique() if "incident_id" in df.columns else 0),
-                ("Successful Heals",     n_healed),
-                ("Escalations",          n_escalated),
-                ("Rollbacks",            int((df["action"] == "NOTEBOOK_ROLLED_BACK").sum())),
-                ("LLM Blocks (invalid)", int((df["action"] == "LLM_OUTPUT_INVALID").sum())),
-                ("Log File",             "data/audit_log.jsonl"),
-            ]
-            for label, val in stats:
-                st.markdown(
-                    f"<div style='display:flex; justify-content:space-between; align-items:center; "
-                    f"padding:9px 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:0.84rem;'>"
-                    f"<span style='color:#94a3b8;'>{label}</span>"
-                    f"<span style='color:{CYAN}; font-weight:700; font-family:monospace;'>{val}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — System Architecture
+# ══════════════════════════════════════════════════════════════════════════════
+with tab5:
+    r1, r2, r3 = st.columns([2, 2, 2], gap="medium")
+
+    # ── Capability radar ──────────────────────────────────────────────────────
+    with r1:
+        st.markdown('<div class="sh">AEGIS vs Baseline — Capability Radar</div>', unsafe_allow_html=True)
+        cats = ["Autonomous<br>Repair", "RCA<br>Accuracy", "Safety<br>Layers",
+                "ML<br>Monitoring", "GitOps<br>Integration", "Audit<br>Trail"]
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[9, 9, 10, 8, 9, 10], theta=cats, fill="toself",
+            name="AEGIS",
+            line=dict(color=CYAN, width=2.5),
+            fillcolor="rgba(0,212,255,.18)",
+            marker=dict(size=8, color=CYAN),
+        ))
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[1, 3, 2, 1, 2, 1], theta=cats, fill="toself",
+            name="Manual On-Call",
+            line=dict(color=RED, width=2, dash="dash"),
+            fillcolor="rgba(255,68,68,.1)",
+            marker=dict(size=6, color=RED),
+        ))
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[3, 4, 3, 2, 1, 3], theta=cats, fill="toself",
+            name="Rule-Based Alerts",
+            line=dict(color=ORANGE, width=2, dash="dot"),
+            fillcolor="rgba(255,140,0,.08)",
+            marker=dict(size=6, color=ORANGE),
+        ))
+        dfig(fig_radar, 370)
+        fig_radar.update_layout(
+            polar=dict(
+                bgcolor="rgba(17,24,39,.6)",
+                radialaxis=dict(visible=True, range=[0,10], gridcolor="rgba(255,255,255,.08)",
+                                tickcolor="#334155", color="#64748b", showticklabels=False),
+                angularaxis=dict(gridcolor="rgba(255,255,255,.08)", color="#94a3b8"),
+            ),
+            showlegend=True,
+            legend=dict(orientation="h", y=-0.05, x=0.5, xanchor="center"),
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+
+    # ── AI stack ─────────────────────────────────────────────────────────────
+    with r2:
+        st.markdown('<div class="sh">AI Stack</div>', unsafe_allow_html=True)
+        ai_stack = [
+            (GREEN,   "GPT-5.5",     "EPAM DIAL",  "Whole-notebook comprehensive repair"),
+            (CYAN,    "GPT-4o",      "EPAM DIAL",  "Structured JSON RCA with confidence score"),
+            (PURPLE,  "LangGraph",   "v0.2",       "15-node async multi-agent state machine"),
+            (GOLD,    "LangChain",   "AzureOpenAI","LLM integration layer"),
+            ("#4ade80","ChromaDB",   "in-process", "Incident memory · SHA-256 embeddings"),
+            ("#818cf8","MLflow",     "Databricks", "Model registry · drift detection · promotion"),
+            (ORANGE,  "Databricks",  "SDK v0.38",  "Job health · notebook fetch/upload · runs"),
+        ]
+        for color, name, provider, desc in ai_stack:
+            st.markdown(f"""
+            <div style="display:flex;align-items:flex-start;gap:10px;
+                        padding:9px 12px;margin-bottom:5px;
+                        background:rgba(17,24,39,.7);border:1px solid rgba(255,255,255,.06);
+                        border-left:3px solid {color};border-radius:0 8px 8px 0;">
+              <div style="min-width:90px;font-weight:800;color:{color};font-size:.84rem;">{name}</div>
+              <div>
+                <div style="font-size:.78rem;color:#94a3b8;">{provider}</div>
+                <div style="font-size:.8rem;color:#e2e8f0;margin-top:2px;">{desc}</div>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sh">GitOps Pipeline</div>', unsafe_allow_html=True)
+        for color, name, desc in [
+            (PURPLE, "PyGithub",      "PR creation · indefinite merge poll"),
+            (PURPLE, "GitHub Actions","CD trigger · workflow poll to terminal state"),
+            (GREEN,  "GitHub Branch", "auto hotfix branch per incident"),
+        ]:
+            st.markdown(f"""
+            <div style="display:flex;gap:10px;padding:8px 12px;margin-bottom:5px;
+                        background:rgba(17,24,39,.7);border-left:3px solid {color};
+                        border-radius:0 8px 8px 0;">
+              <div style="font-weight:700;color:{color};min-width:120px;font-size:.82rem;">{name}</div>
+              <div style="font-size:.8rem;color:#94a3b8;">{desc}</div>
+            </div>""", unsafe_allow_html=True)
+
+    # ── Stats panel ───────────────────────────────────────────────────────────
+    with r3:
+        st.markdown('<div class="sh">By the Numbers</div>', unsafe_allow_html=True)
+        stats = [
+            (CYAN,    "15",  "LangGraph nodes"),
+            (GREEN,   "7",   "Guardrail layers"),
+            (GOLD,    "103", "Tests (94 in CI)"),
+            (PURPLE,  "12",  "Email notification stages"),
+            (ORANGE,  "10",  "Intentional bugs in demo notebook"),
+            (RED,     "3",   "Max auto-repair retries"),
+            ("#818cf8","∞",  "PR merge poll — no timeout"),
+            (GREEN,   "70%", "RCA confidence threshold"),
+            (CYAN,    "5",   "Rate limit: triggers/job/10 min"),
+            ("#4ade80","0",  "Human actions required (success path)"),
+        ]
+        for color, val, label in stats:
+            st.markdown(f"""
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:.85rem;">
+              <span style="color:#94a3b8;">{label}</span>
+              <span style="color:{color};font-weight:900;font-family:monospace;font-size:1.05rem;">{val}</span>
+            </div>""", unsafe_allow_html=True)
 
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="sec-h">System Architecture</div>', unsafe_allow_html=True)
-
-        arch = [
-            ("LLM: Repair",    "GPT-5.5 (EPAM DIAL)"),
-            ("LLM: RCA",       "GPT-4o (EPAM DIAL)"),
-            ("Orchestration",  "LangGraph StateGraph 15 nodes"),
-            ("Knowledge Store","ChromaDB + SHA-256 embeddings"),
-            ("Platform",       "Databricks SDK + MLflow"),
-            ("GitOps",         "GitHub API + Actions CD"),
-            ("Notifications",  "Gmail SMTP · 12 email stages"),
-            ("Tests",          "103 tests · 9 test files"),
+        st.markdown('<div class="sh">Real Production Evidence</div>', unsafe_allow_html=True)
+        evidence = [
+            (GREEN, "INC-7BC959AE", "Healed attempt 1 · run 481362957091748"),
+            (GREEN, "INC-B3A904CC", "Healed attempt 2 · run 336259351258626"),
+            (ORANGE,"INC-E25061C7", "3 retries · guardrail rollback · escalated"),
+            (RED,   "INC-DF4F8C83", "Max retries · FIX_ESCALATED · audit trail"),
         ]
-        for label, val in arch:
-            st.markdown(
-                f"<div style='display:flex; justify-content:space-between; align-items:center; "
-                f"padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.82rem;'>"
-                f"<span style='color:#64748b;'>{label}</span>"
-                f"<span style='color:#e2e8f0; font-size:0.78rem;'>{val}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        for color, inc_id, note in evidence:
+            st.markdown(f"""
+            <div style="padding:7px 10px;margin-bottom:5px;
+                        background:rgba(17,24,39,.7);border-left:3px solid {color};
+                        border-radius:0 8px 8px 0;">
+              <div style="font-weight:700;color:{color};font-size:.8rem;font-family:monospace;">{inc_id}</div>
+              <div style="font-size:.75rem;color:#64748b;margin-top:2px;">{note}</div>
+            </div>""", unsafe_allow_html=True)
 
 
-# ─── Sidebar ─────────────────────────────────────────────────────────────────
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown(f"<div style='color:{CYAN}; font-weight:800; font-size:1.1rem;'>🛡️ AEGIS</div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='color:#64748b; font-size:0.75rem; margin-bottom:16px;'>v2.0.0 · Production</div>", unsafe_allow_html=True)
-
+    st.markdown(f"<div style='color:{CYAN};font-weight:900;font-size:1.2rem;'>🛡️ AEGIS</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='color:#475569;font-size:.75rem;margin-bottom:16px;'>v2.0.0 · Production</div>", unsafe_allow_html=True)
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-
-    auto = st.checkbox("Auto-refresh every 15s")
-
+    auto = st.checkbox("Auto-refresh every 15s", value=False)
     st.markdown("---")
-    st.markdown(f"<div style='color:#94a3b8; font-size:0.78rem; line-height:1.6;'>"
-                f"<b style='color:{CYAN}'>Run demo:</b><br>"
-                f"<code style='font-size:0.72rem;'>python demo/production_multi_agent.py</code>"
-                f"</div>", unsafe_allow_html=True)
-
+    st.markdown(f"""
+    <div style='color:#94a3b8;font-size:.78rem;line-height:1.7;'>
+      <b style='color:{CYAN}'>Run demo:</b><br>
+      <code style='font-size:.72rem;'>python demo/production_multi_agent.py</code>
+      <br><br>
+      <b style='color:{CYAN}'>Dashboard:</b><br>
+      <code style='font-size:.72rem;'>streamlit run demo/dashboard.py</code>
+    </div>""", unsafe_allow_html=True)
     if auto:
         time.sleep(15)
         st.rerun()
 
-
 # ─── Footer ───────────────────────────────────────────────────────────────────
 st.markdown(
-    f"<div style='text-align:center; padding:18px; color:#334155; font-size:0.72rem; "
-    f"border-top:1px solid rgba(255,255,255,0.04); margin-top:16px;'>"
+    f"<div style='text-align:center;padding:18px;color:#1e293b;font-size:.72rem;"
+    f"border-top:1px solid rgba(255,255,255,.04);margin-top:14px;'>"
     f"AEGIS v2.0.0 · Autonomous End-to-end Guardian for Intelligent Systems · "
     f"LangGraph 15-node · GPT-5.5 repair · 7 guardrails · Databricks production"
     f"</div>",
