@@ -109,9 +109,29 @@ async def job_selector_node(state: AEGISState) -> AEGISState:
     """
     Interactive job selection at startup.
     Lists all Databricks jobs and lets user choose which to monitor.
+    When called from a non-interactive context (e.g. Streamlit), user_selected_job_id
+    is pre-populated so the input() prompt is skipped entirely.
     """
     logger.info("[Workflow] Stage: job_selector")
-    
+
+    # ── Non-interactive fast-path (Streamlit / CI) ────────────────────────
+    if state.get("user_selected_job_id"):
+        selection = str(state["user_selected_job_id"]).strip()
+        logger.info(f"[JobSelector] Non-interactive mode — pre-selected: {selection}")
+        if selection.lower() == "all":
+            state["monitor_all_jobs"] = True
+            state["specific_job_id"] = None
+        elif "," in selection:
+            state["monitor_all_jobs"] = False
+            state["specific_job_id"] = None
+        else:
+            state["monitor_all_jobs"] = False
+            state["specific_job_id"] = selection
+        state.setdefault("monitor_ml_models", False)
+        state["current_stage"] = "job_selected"
+        return state
+    # ─────────────────────────────────────────────────────────────────────
+
     from databricks.sdk import WorkspaceClient
     from tabulate import tabulate
     

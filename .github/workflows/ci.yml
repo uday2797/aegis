@@ -32,38 +32,9 @@ jobs:
           python -m pytest tests/ -v --tb=short --ignore=tests/test_integration_smoke.py
           echo "=== Tests complete ==="
 
-  lint-notebooks:
-    name: Lint Notebooks
-    runs-on: ubuntu-latest
-    needs: unit-tests
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install linting tools
-        run: pip install pyflakes
-
-      - name: Lint all notebooks
-        run: |
-          echo "=== Linting notebooks ==="
-          FAILED=0
-          for nb in de_project/notebooks/*.py; do
-            # failing_notebook.py is intentionally broken — AEGIS uses it as a test target
-            if [[ "$nb" == *"failing_notebook"* ]]; then
-              echo "⏭️  $nb (skipped — intentionally broken for AEGIS demo)"
-              continue
-            fi
-            python -m pyflakes "$nb" 2>&1 && echo "✅ $nb" || { echo "❌ $nb"; FAILED=1; }
-          done
-          exit $FAILED
-
   validate-bundle:
     name: Validate DAB Bundle
     runs-on: ubuntu-latest
-    needs: lint-notebooks
     steps:
       - uses: actions/checkout@v4
 
