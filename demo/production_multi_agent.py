@@ -29,7 +29,9 @@ console = Console(force_terminal=True, highlight=False)
 
 def load_config(path: str = "config/config.yaml") -> dict:
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        raw = f.read()
+    raw = os.path.expandvars(raw)
+    return yaml.safe_load(raw)
 
 
 async def main():

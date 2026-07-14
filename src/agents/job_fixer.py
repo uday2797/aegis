@@ -94,9 +94,9 @@ class JobFixerAgent:
         AuditLog.record("FIX_STARTED", incident_id=incident_id, job_id=job_id, attempt=retry_attempt)
         
         # ───────────────────────────────────────────────────────────────────
-        # GUARDRAIL #5: RATE LIMITER — check before doing ANY work
+        # GUARDRAIL #5: RATE LIMITER — atomic check-and-record prevents TOCTOU
         # ───────────────────────────────────────────────────────────────────
-        allowed, rate_reason = RateLimiter.check(job_id)
+        allowed, rate_reason = RateLimiter.check_and_record(job_id)
         if not allowed:
             AuditLog.record("RATE_LIMITED", incident_id=incident_id, job_id=job_id, reason=rate_reason)
             return {
@@ -233,8 +233,6 @@ class JobFixerAgent:
                 )
             
             # Step 4: Trigger job run and monitor
-            # ─── GUARDRAIL #5: Record trigger in rate limiter ─────────────
-            RateLimiter.record_trigger(job_id)
             logger.info(f"[JobFixer] Triggering post-fix run for job {job_id} (remaining quota: {RateLimiter.remaining(job_id)})")
             run = self.client.jobs.run_now(job_id=job_id)
             run_id = run.run_id

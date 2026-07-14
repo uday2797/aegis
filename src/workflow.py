@@ -512,7 +512,7 @@ async def job_fixer_node(state: AEGISState) -> AEGISState:
         await _mail.send_stage("escalation", {
             "incident_id": state["current_incident_id"],
             "job_name": state["current_job_name"],
-            "confidence": state.get("rca_confidence", 0),
+            "confidence": state.get("confidence", 0),
             "root_cause": state.get("root_cause", "Unknown"),
             "threshold": RCA_CONFIDENCE_THRESHOLD,
             "reason": (
