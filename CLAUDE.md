@@ -21,7 +21,10 @@ python -m pytest tests/ -v --tb=short --ignore=tests/test_integration_smoke.py
 python -m pyflakes de_project/notebooks/01_ingest.py
 python -m pyflakes de_project/notebooks/02_transform.py
 
-# Run the production multi-agent demo (requires .env)
+# Run the Streamlit dashboard (recommended — opens in browser with live workflow visualization)
+streamlit run demo/streamlit_app.py
+
+# Run the production multi-agent demo via CLI (headless / no browser)
 python demo/production_multi_agent.py
 
 # Validate the Databricks Asset Bundle before deploying
@@ -32,13 +35,15 @@ cd de_project && databricks bundle validate
 
 ## Architecture
 
-### Two entry points, one canonical repair path
+### Three entry points, one canonical repair path
 
-**Production path** (`demo/production_multi_agent.py` → `src/workflow.py`): A 15-node LangGraph `StateGraph` that drives the full autonomous lifecycle interactively. This is the primary entry point for demos and production use.
+**Streamlit dashboard** (`demo/streamlit_app.py` → `src/workflow.py`): The recommended entry point. Runs the same LangGraph workflow in a background thread and streams live progress into a browser UI. Three-phase wizard (Connect → Select Jobs → Run AEGIS), real-time 15-node workflow visualization, live loguru terminal, email preview panel, and guardrail status panel. Theme: SRH Orange Army (`#FF6200`). Configured via `.streamlit/config.toml`.
+
+**Production CLI path** (`demo/production_multi_agent.py` → `src/workflow.py`): Headless/non-interactive entry point for the same 15-node LangGraph `StateGraph`. Use for CI, automated runs, or when a browser is not available.
 
 **Simulation/legacy path** (`src/main.py` → `AEGISOrchestrator`): A continuous polling loop used for simulation demos with injected failures. Uses the same underlying agents but orchestrates them imperatively rather than through LangGraph.
 
-Both paths delegate notebook repair to `JobFixerAgent`. All healing logic lives there; the `HealOrchestrator._fix_notebook_and_retry` in the legacy path just calls `JobFixerAgent.fix_job`.
+All paths delegate notebook repair to `JobFixerAgent`. All healing logic lives there; the `HealOrchestrator._fix_notebook_and_retry` in the legacy path just calls `JobFixerAgent.fix_job`.
 
 ### LangGraph state machine (`src/workflow.py`)
 
