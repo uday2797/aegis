@@ -46,24 +46,3 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-
-  label-aegis-fix:
-    name: Label AEGIS Auto-Fix PRs
-    runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.title, '[AEGIS Auto-Fix]')
-    steps:
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: ['aegis-auto-fix', 'ready-to-merge']
-            });
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: '🛡️ **AEGIS Auto-Fix detected** — notebook code was repaired autonomously by GPT-4o.\n\nThis PR will trigger an automatic deployment to Databricks on merge.'
-            });
