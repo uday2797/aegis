@@ -9,6 +9,7 @@
 [![Guardrails](https://img.shields.io/badge/guardrails-7%20layers-blue)](#guardrails--safety-layers)
 [![LLM](https://img.shields.io/badge/LLM-GPT--5.5%20%7C%20GPT--4o-orange)](#ai-tools-used)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](#setup)
+[![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B)](#streamlit-dashboard-ui)
 
 ---
 
@@ -27,6 +28,36 @@ Every data engineering team has woken up at 3am because a Databricks job failed.
 | **Total MTTR** | **1.5–4 hours** |
 
 **AEGIS compresses that entire loop to under 5 minutes — autonomously, for jobs and ML models.**
+
+---
+
+## Streamlit Dashboard UI
+
+AEGIS ships with a full interactive dashboard built with Streamlit — the recommended way to run and demo the system.
+
+```bash
+streamlit run demo/streamlit_app.py
+```
+
+The UI walks you through three steps:
+
+| Step | What happens |
+|---|---|
+| **1 — Connect** | Enter your Databricks host and token; AEGIS validates the connection and lists all available jobs |
+| **2 — Select Jobs** | Pick which job(s) to monitor and whether to enable ML model monitoring |
+| **3 — Run AEGIS** | Full autonomous lifecycle runs in a background thread; the dashboard polls and updates live |
+
+While running, the dashboard shows:
+
+- **Workflow progress** — 15-node LangGraph pipeline with live active/done/pending states
+- **Live log terminal** — real-time loguru stream (last 60 lines)
+- **Checklist** — per-node status with inline details (confidence score, PR URL, MTTR, incident ID, etc.)
+- **Email preview** — all 10 email stages with sent/pending status
+- **Guardrails panel** — 7 guardrail badges with live detail text (confidence %, diff confirmation, audit count, etc.)
+- **KPI cards** — MTTR, jobs monitored, bugs fixed, emails sent, guardrails active
+- **Completion banner** — success / escalation / healthy / error outcome summary
+
+Theme: SRH Orange Army light palette (`#FF6200` orange, white background). Configured in `.streamlit/config.toml`.
 
 ---
 
@@ -172,7 +203,7 @@ ML monitoring opted in → MLflow queried for Production models
 
 ## Testing
 
-AEGIS ships with a complete test suite — **103 tests, 0 failures**:
+AEGIS ships with a complete test suite — **94 tests, 0 failures**:
 
 ```bash
 python -m pytest tests/ -q
@@ -241,7 +272,7 @@ aegis/
 │       ├── data_pipeline.yml     # Databricks job for full pipeline
 │       ├── failing_job.yml       # Databricks job for failing_notebook
 │       └── ml_job.yml            # Databricks job for ML retraining
-├── tests/                        # Complete test suite (103 tests)
+├── tests/                        # Complete test suite (94 tests)
 │   ├── conftest.py
 │   ├── test_policy_engine.py
 │   ├── test_validators.py
@@ -255,14 +286,20 @@ aegis/
 ├── docs/
 │   └── architecture.md           # Mermaid diagrams: workflow, components, sequence, guardrails
 ├── demo/
-│   ├── production_multi_agent.py # Full production entry point
+│   ├── streamlit_app.py          # Streamlit interactive dashboard (recommended entry point)
+│   ├── production_multi_agent.py # CLI production entry point
 │   ├── production_run.py         # Single-run demo
-│   └── quick_test.py             # 5-failure-type smoke test
+│   ├── quick_test.py             # 5-failure-type smoke test
+│   ├── run_demo.py               # Quick demo runner
+│   ├── seed_knowledge.py         # Pre-seed ChromaDB with sample incidents
+│   └── aegis_logo.png / *.png   # Dashboard UI assets
 ├── config/
 │   └── config.yaml               # Thresholds, drift config, notebook-to-git path mapping
 ├── .github/workflows/
 │   ├── ci.yml                    # Tests + lint + DAB validate on PRs
 │   └── cd.yml                    # Deploy to Databricks on merge to master
+├── .streamlit/
+│   └── config.toml               # Streamlit theme (SRH Orange Army palette)
 ├── .env.example                  # Environment variable template
 ├── docker-compose.yml
 └── requirements.txt
@@ -395,15 +432,21 @@ AEGIS will:
 
 ### 4. Run AEGIS
 
+**Option A — Streamlit dashboard (recommended):**
+
+```bash
+streamlit run demo/streamlit_app.py
+```
+
+Opens in your browser. Connect your Databricks credentials, select jobs, and watch the full 15-node workflow run live with real-time logs, email tracking, and guardrail status.
+
+**Option B — CLI (headless / CI):**
+
 ```bash
 python demo/production_multi_agent.py
 ```
 
-AEGIS will:
-1. List all jobs in your workspace
-2. Let you choose which job(s) to monitor
-3. Ask if you want ML model monitoring
-4. Run the full autonomous healing loop
+Both options run the same LangGraph workflow. The Streamlit UI adds live visualization; the CLI is suitable for automated or non-interactive runs.
 
 ### 5. Run tests
 
@@ -415,16 +458,16 @@ python -m pytest tests/ -q
 
 ## Hackathon Demo: Two-Run Video Strategy
 
-To show both the DE and ML paths in a single video:
+Use the Streamlit dashboard (`streamlit run demo/streamlit_app.py`) to record both runs — the live workflow visualization and terminal stream make the autonomous behaviour visible in real time.
 
 **Run 1 — DE path (job self-healing):**
 1. Ensure `AEGIS_FORCE_ML_DRIFT=false` in `.env`
-2. Start AEGIS, select the failing job (`[AEGIS Test] Failing Data Pipeline`), skip ML monitoring
+2. Open the dashboard, connect to Databricks, select the failing job (`[AEGIS Test] Failing Data Pipeline`), disable ML monitoring, click **Run AEGIS**
 3. AEGIS detects failure → RCA → comprehensive notebook scan (GPT-5.5 fixes ALL 10 bugs in one pass) → re-run passes → PR → CD deploy → confirmation email
 
 **Run 2 — ML path (model drift & retraining):**
 1. Set `AEGIS_FORCE_ML_DRIFT=true` in `.env` (guarantees drift; overrides the 35% random roll)
-2. Start AEGIS, select a healthy job (or skip job monitoring), enable ML monitoring
+2. Open the dashboard, connect, select any healthy job (or skip), enable ML monitoring, click **Run AEGIS**
 3. AEGIS detects `sales_forecast_v3` degradation → emails drift alert → triggers `[AEGIS ML] Model Retraining Pipeline` → polls until complete → compares accuracy in MLflow → promotes to Production → sends healing complete email
 
 > The two paths are mutually exclusive per run — `route_after_initial_email` routes to either DE or ML, never both. Show them in separate video segments.
