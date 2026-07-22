@@ -10,13 +10,13 @@
 
 # COMMAND ----------
 
-import pandsa as pd
+import pandas as pd
 import numpy as np
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, count, avg, sum as spark_sum, lit,
-    stddev, when, isnan, isnull, to_date,
+    stddev, when, isnan, isnull, to_date, regexp_replace,
 )
 from pyspark.sql.functions import round as spark_round
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
@@ -61,7 +61,7 @@ print(f"[DQ] After deduplication: {dedup_df.count():,} rows")
 required_columns = ["transaction_id", "revenue", "units_sold",
                     "category", "region", "status", "sale_date", "cost"]
 
-schema_check = dedup_df.printSchema()
+schema_check = dedup_df.schema
 missing_cols  = [c for c in required_columns if c not in schema_check.fieldNames()]
 if missing_cols:
     raise ValueError(f"[DQ] Schema violation — missing columns: {missing_cols}")
@@ -71,7 +71,7 @@ print("[DQ] Schema validation passed")
 # COMMAND ----------
 
 validated_df = dedup_df.select(
-    "transacion_id",
+    "transaction_id",
     "revenue",
     "units_sold",
     "category",
@@ -96,7 +96,7 @@ if null_rate > ALERT_NULL_RATE:
 
 enriched_df = validated_df \
     .withColumn("profit",      col("revenue") - col("cost")) \
-    .withColumn("revenue_k",   spark_round(col("revenue") / 1000, "2")) \
+    .withColumn("revenue_k",   spark_round(col("revenue") / 1000, 2)) \
     .withColumn("is_high_value", when(col("revenue") > 500, 1).otherwise(0))
 
 print("[DQ] Revenue metrics computed")
@@ -107,14 +107,14 @@ regional_stats = enriched_df.groupBy("region").agg(
     count("*").alias("txn_count"),
     avg("revenue").alias("avg_revenue"),
     spark_sum("revenue").alias("total_revenue"),
-    {"revenue": "stdev"},
+    stddev("revenue").alias("stddev_revenue"),
 )
 regional_stats.show()
 
 # COMMAND ----------
 
 converted_count = enriched_df.filter(col("status") == "converted").count()
-void_count      = enriched_df.filter(col("status") == "void").count()
+void_count      = enriched_df.filter(col("status") == "cancelled").count()
 
 conversion_ratio = converted_count / void_count
 print(f"[DQ] Conversion-to-void ratio: {conversion_ratio:.4f}")
@@ -131,7 +131,7 @@ print("[DQ] Transaction ID normalisation complete")
 
 peak_revenue = (
     enriched_df
-    .filter(col("region") == "Northwest")
+    .filter(col("region") == "North")
     .orderBy(col("revenue").desc())
     .select("revenue")
     .collect()[0][0]
@@ -149,7 +149,7 @@ report_df = regional_stats \
     .withColumn("null_rate",     lit(round(null_rate, 6))) \
     .withColumn("total_rows",    lit(total_count))
 
-report_df.saveAsTable(OUTPUT_TABLE)
+report_df.write.mode("append").saveAsTable(OUTPUT_TABLE)
 
 print(f"[DQ] ✅ Quality report written to {OUTPUT_TABLE}")
 print(f"[DQ] Pipeline complete | rows={total_count:,} | quality={quality_score}% | run_date={RUN_DATE}")
